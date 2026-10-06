@@ -136,3 +136,14 @@ $RECYCLE.BIN/
 # Documentacao local de CI/CD (pode conter detalhes de infraestrutura)
 # -----------------------------------------------------------------------------
 /README-CI-CD.local.md
+
+# -----------------------------------------------------------------------------
+# Chaves e artefatos de deploy (só existem na VPS; proteção contra commit acidental)
+# -----------------------------------------------------------------------------
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+backups/
+.deploy-history
+.deploy.lock
