@@ -1,0 +1,243 @@
+# CI — roda em todo PR para a main e é reutilizada pelo CD antes de publicar.
+#
+# Check obrigatório no ruleset: "ci-ok" (job agregador no fim do arquivo).
+# Layout: backend/ (NestJS 11 + Prisma 7 + MySQL) e frontend/ (React + Vite), npm com um lock por app.
+# Node vem do .nvmrc (mesma major do FROM node:24-alpine dos Dockerfiles).
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read # nenhum job da CI escreve nada
+
+concurrency:
+  # PR: cancela a execução anterior do mesmo PR. Chamada pelo CD: run_id único, nunca cancela.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  api:
+    name: api
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      mysql:
+        # Mesma major do MySQL de produção (mysql_shared, 8.4).
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: atlas_stock_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-root --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      NODE_ENV: test
+      # Banco descartável desta execução. prisma.config.ts monta a URL a partir de MYSQL_*.
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ci-root
+      MYSQL_DATABASE: atlas_stock_ci
+      MYSQL_SSL: "false"
+      # Valores descartáveis só para a validação de env (src/config/env.validation.ts) passar. Não são segredos.
+      JWT_ACCESS_SECRET: ci-access-secret-not-a-real-secret-0000000000
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-a-real-secret-000000000
+      CORS_ORIGIN: http://localhost:5173
+      PORT: "3100"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gerar Prisma Client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Aplicar todas as migrations num banco vazio
+        run: npx prisma migrate deploy
+
+      - name: Conferir se schema.prisma e migrations estão em sincronia
+        run: |
+          set +e
+          npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+          code=$?
+          set -e
+          if [[ "$code" -eq 2 ]]; then
+            echo "::error title=Migration faltando::schema.prisma tem mudanças sem migration. Rode 'npx prisma migrate dev --name <nome>' localmente e commite a pasta gerada."
+            exit 1
+          fi
+          exit "$code"
+
+      - name: Testes
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Integração com API compilada e MySQL real
+        run: npm run test:e2e
+
+      # Os alertas não críticos permanecem visíveis para os próximos PRs.
+      - name: Auditoria de dependências
+        run: npm audit --omit=dev --audit-level=critical
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Auditoria de dependências
+        run: npm audit --omit=dev --audit-level=critical
+
+  docker:
+    name: docker (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: backend
+            target: runtime
+          - image: migrate
+            context: backend
+            target: migrate
+          - image: web
+            context: frontend
+            target: runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Só valida que a imagem builda. Não publica nada a partir de PR.
+      - name: Build da imagem (sem push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  workflows:
+    name: workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Actions fixadas por SHA
+        run: node scripts/check-action-pins.mjs
+
+      - name: Testes das proteções de deploy
+        run: |
+          node --test scripts/pipeline.test.mjs
+          node --test scripts/tests/deploy.test.mjs
+          bash scripts/tests/pipeline.sh
+
+      - name: actionlint
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+
+      - name: zizmor (auditoria de segurança dos workflows)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run zizmor==1.30.1 --format=github .
+
+      - name: shellcheck dos scripts de deploy
+        run: |
+          shopt -s nullglob
+          files=(deploy/*.sh deploy/hooks/*.sh scripts/*.sh scripts/tests/*.sh)
+          if (( ${#files[@]} )); then shellcheck "${files[@]}"; else echo "Nenhum script para checar."; fi
+
+      - name: Compose de produção válido
+        env:
+          IMAGE_TAG: "0000000000000000000000000000000000000000"
+          DOMAIN: ci.example.test
+        run: |
+          cd deploy
+          touch .env.production .env.migrate
+          docker compose -f compose.prod.yml --profile migrate config --quiet
+
+  ci-ok:
+    # Único check exigido pelo ruleset. Passa só se todos os jobs acima passaram (ou foram pulados).
+    name: ci-ok
+    if: always()
+    needs: [api, web, docker, workflows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Conferir resultado de todos os jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: bash scripts/check-ci-results.sh

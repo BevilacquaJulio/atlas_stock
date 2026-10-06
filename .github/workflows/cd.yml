@@ -1,0 +1,235 @@
+# pipeline: github-actions-vps
+#
+# CD — todo push na main (na prática, todo merge de PR) testa, builda e publica na VPS.
+#
+# Atlas Stock: backend/ (api + migrate) e frontend/ (web). Mantenha a linha "pipeline: github-actions-vps" acima.
+#
+# Fluxo: ci (reuso do ci.yml) + changes → build (imagens no GHCR, tag = SHA) → deploy (SSH → deploy.sh).
+# Migration nova desde o último deploy bem-sucedido → environment "production-db" (aprovação manual + backup).
+# Sem migration nova → environment "production" (automático).
+# Se "production-db" não tiver revisor obrigatório (repo privado fora do Enterprise), o gate falha fechado:
+# deploy com migration só sai por Actions → CD → Run workflow com approve_migrations marcado.
+#
+# Pré-requisitos: environments, secrets e VPS configurados conforme docs/ci-cd.md.
+# Variáveis públicas: APP_URL e HEALTH_PATH (padrão /api/health/ready).
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      approve_migrations:
+        description: Aprovo aplicar migration nova (use só quando production-db não tem revisor obrigatório)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Sem concurrency no nível do workflow de propósito: a CI e o build de merges seguidos podem rodar em paralelo;
+# só o job "deploy" entra na fila "deploy-production" (sem cancelar o que está em andamento).
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MIGRATIONS_PATH: backend/prisma/migrations/
+
+jobs:
+  ci:
+    name: ci
+    # A sintaxe nova "$/.github/workflows/ci.yml" (jul/2026) ainda não é aceita pelo actionlint 1.7.12.
+    # Quando for, troque e remova o ignore.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # a CI só lê o código
+
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # git diff entre commits
+      deployments: read # achar o último deploy bem-sucedido
+    outputs:
+      deployable: ${{ steps.diff.outputs.deployable }}
+      migrations: ${{ steps.diff.outputs.migrations }}
+      infra: ${{ steps.diff.outputs.infra }}
+      base: ${{ steps.diff.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Comparar com o último deploy bem-sucedido
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/deploy-changes.sh
+
+  build:
+    name: build (${{ matrix.image }})
+    needs: [ci, changes]
+    if: needs.changes.outputs.deployable == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # contexto do build
+      packages: write # push das imagens no GHCR
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: api
+            context: backend
+            target: runtime
+          - image: migrate
+            context: backend
+            target: migrate
+          - image: web
+            context: frontend
+            target: runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Nome da imagem (GHCR exige minúsculas)
+        id: img
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push (tag = SHA do commit)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.img.outputs.ref }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy:
+    name: deploy
+    needs: [changes, build]
+    if: needs.changes.outputs.deployable == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout e conferência do commit atual da main
+      deployments: write # registrar o SHA realmente publicado após o health check
+      actions: read # ler as regras de proteção do environment production-db (gate de migration)
+    environment:
+      name: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+      url: ${{ vars.APP_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validar configuração pública antes do deploy
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health/ready' }}
+        run: node scripts/deploy-url.mjs
+
+      # Falha fechado: se production-db não exige revisor (plano/visibilidade sem esse recurso, ou revisor removido),
+      # o job chegou aqui sem aprovação. Nesse caso só segue com disparo manual explícito.
+      - name: Gate de migration
+        if: needs.changes.outputs.migrations == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          APPROVED: ${{ inputs.approve_migrations }}
+        run: bash scripts/migration-gate.sh
+
+      - name: Aviso — arquivos de infraestrutura mudaram
+        if: needs.changes.outputs.infra == 'true'
+        run: echo "::warning title=deploy/ mudou::Arquivos em deploy/ mudaram. A chave do CI não altera infraestrutura — sincronize compose/scripts na VPS manualmente."
+
+      - name: Configurar SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          [[ -n "$SSH_KEY" && -n "$KNOWN_HOSTS" ]]
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Bloquear execução antiga antes de alterar a VPS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check-deploy-target.sh
+
+      - name: Deploy na VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          SHA: ${{ github.sha }}
+          MIGRATIONS: ${{ needs.changes.outputs.migrations }}
+        run: |
+          [[ -n "$VPS_HOST" && -n "$VPS_USER" ]]
+          remote_cmd="deploy $SHA"
+          if [[ "$MIGRATIONS" == "true" ]]; then remote_cmd="$remote_cmd --backup"; fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "$remote_cmd"
+
+      - name: Health check público
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health/ready' }}
+        run: bash scripts/public-health.sh
+
+      - name: Registrar versão publicada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          ENV_NAME: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: bash scripts/record-deployment.sh
+
+      - name: Resumo
+        if: always()
+        env:
+          SHA: ${{ github.sha }}
+          ENV_NAME: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+          BASE: ${{ needs.changes.outputs.base }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy: ${JOB_STATUS}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Environment | ${ENV_NAME} |"
+            echo "| Comparado com | \`${BASE:-nenhum deploy anterior}\` |"
+            echo "| Imagens | \`ghcr.io/${GITHUB_REPOSITORY,,}/{api,migrate,web}:${SHA}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remover chave do runner
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

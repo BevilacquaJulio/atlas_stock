@@ -96,3 +96,9 @@ npm run test:cov  # cobertura
 - **Estoque transacional** — criar produto com estoque inicial e registrar
   movimentações ajustam saldo e custo médio dentro de uma transação Prisma.
 - **RBAC em guard** (`@Roles`), nunca no controller.
+
+## CI e deploy
+
+Use npm run lint:check, npm run typecheck, npm test e npm run build.
+O teste npm run test:e2e exige NODE_ENV=test, MYSQL_DATABASE=atlas_stock_ci e MYSQL_HOST=127.0.0.1, com migrations aplicadas.
+Produção e configuração do pipeline: [guia CI/CD](../docs/ci-cd.md).

@@ -20,7 +20,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik
-      - "traefik.http.routers.g5_api.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.routers.g5_api.rule=(Host(`${DOMAIN}`) && PathPrefix(`/api`)) || Host(`api.${DOMAIN}`)"
       - traefik.http.routers.g5_api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.g5_api.tls=true
       - traefik.http.routers.g5_api.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
@@ -33,11 +33,6 @@ services:
     image: bl_atlas_stock-app
     build:
       context: ./frontend
-      args:
-        # VITE_* e compilado no build (build-time). Aponta para a API publica.
-        VITE_API_URL: https://api.${DOMAIN}/api
-        VITE_DEMO_ADMIN_EMAIL: ${VITE_DEMO_ADMIN_EMAIL:-admin@atlas.com}
-        VITE_DEMO_ADMIN_PASSWORD: ${VITE_DEMO_ADMIN_PASSWORD:-atlas_stock123}
     container_name: bl_g5-app
     restart: unless-stopped
     depends_on:
@@ -57,7 +52,7 @@ services:
       - traefik.http.routers.g5_web.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.g5_web.tls=true
       - traefik.http.routers.g5_web.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      - traefik.http.services.g5_web.loadbalancer.server.port=80
+      - traefik.http.services.g5_web.loadbalancer.server.port=8080
     mem_limit: 128m
     cpus: 0.25
 
@@ -70,7 +65,7 @@ services:
     container_name: bl_g5-migrate
     build:
       context: ./backend
-      target: build
+      target: migrate
     profiles:
       - tools
     env_file:
