@@ -128,6 +128,8 @@ arquivos de ambiente reais ao GitHub.
 .env.migrate contém somente MYSQL_*, preferencialmente com usuário próprio para DDL.
 .env.backup contém DB_NAME, DB_USER e DB_PASSWORD do database realmente existente.
 A CA do mysql_shared fica em secrets/mysql-ca.pem, montada em API e migrator.
+Ela é um certificado público e precisa ser legível pelo UID 1000 dos containers
+(por exemplo, modo 644); as credenciais dos ambientes permanecem em modo 600.
 O usuário de backup precisa das permissões de mysqldump para rotinas e triggers.
 O backup fica na própria VPS; mantenha cópia externa para recuperar perda do servidor.
 
