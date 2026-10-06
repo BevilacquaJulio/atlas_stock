@@ -4,7 +4,7 @@
 #
 # Atlas Stock: backend/ (api + migrate) e frontend/ (web). Mantenha a linha "pipeline: github-actions-vps" acima.
 #
-# Fluxo: ci (reuso do ci.yml) + changes → build (imagens no GHCR, tag = SHA) → deploy (SSH com forced command).
+# Fluxo: ci (reuso do ci.yml) + changes → build (imagens no GHCR, tag = SHA) → deploy (SSH → deploy.sh).
 # Migration nova desde o último deploy bem-sucedido → environment "production-db" (aprovação manual + backup).
 # Sem migration nova → environment "production" (automático).
 # Se "production-db" não tiver revisor obrigatório (repo privado fora do Enterprise), o gate falha fechado:
@@ -37,6 +37,8 @@ defaults:
 
 env:
   MIGRATIONS_PATH: backend/prisma/migrations/
+  # Script de deploy na VPS + projeto. A chave do CI é a do usuário deploy (compartilhada, sem forced command).
+  DEPLOY_SCRIPT: /home/deploy/bin/deploy.sh bl_atlas_stock
 
 jobs:
   ci:
@@ -229,7 +231,7 @@ jobs:
           SHA: ${{ github.sha }}
           MIGRATIONS: ${{ needs.changes.outputs.migrations }}
         run: |
-          remote_cmd="deploy $SHA"
+          remote_cmd="$DEPLOY_SCRIPT deploy $SHA"
           if [[ "$MIGRATIONS" == "true" ]]; then remote_cmd="$remote_cmd --backup"; fi
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "$remote_cmd"

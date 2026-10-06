@@ -34,6 +34,8 @@ defaults:
 env:
   # Mesmo valor do cd.yml.
   MIGRATIONS_PATH: backend/prisma/migrations/
+  # Script de deploy na VPS + projeto. A chave do CI é a do usuário deploy (compartilhada, sem forced command).
+  DEPLOY_SCRIPT: /home/deploy/bin/deploy.sh bl_atlas_stock
 
 jobs:
   validate:
@@ -116,7 +118,7 @@ jobs:
           SHA: ${{ inputs.sha }}
         run: |
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
-            -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "deploy $SHA"
+            -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "$DEPLOY_SCRIPT deploy $SHA"
 
       - name: Remover chave do runner
         if: always()

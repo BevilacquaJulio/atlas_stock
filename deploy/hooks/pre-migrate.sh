@@ -3,7 +3,7 @@
 # Chamado pelo deploy.sh com: <diretório do projeto> <sha>
 #
 # Instalação, na VPS:
-#   install -m 750 pre-migrate.sh /home/deploy/apps/atlas_stock/hooks/pre-migrate.sh
+#   install -m 750 pre-migrate.sh /home/juliobevi/htdocs/bevilabs/bl_atlas_stock/hooks/pre-migrate.sh
 #
 # Credenciais em <projeto>/.env.backup (chmod 600), formato CHAVE=valor, sem aspas:
 #   DB_NAME=g5

@@ -5,7 +5,7 @@
 #   environments production / production-db, ruleset da main e variáveis APP_URL/HEALTH_PATH.
 #
 # Uso (na raiz do repositório, com o gh autenticado como dono/admin do repo):
-#   APP_URL=https://venari.bevilabs.com.br bash <skill>/scripts/apply-repo-settings.sh [owner/repo]
+#   APP_URL=https://app.example.com bash <skill>/scripts/apply-repo-settings.sh [owner/repo]
 # Opcionais: HEALTH_PATH=/api/health   RULESET_FILE=.github/rulesets/main.json   WITH_RELEASE=1 (cria o environment release)
 #
 # Idempotente: pode rodar de novo sem duplicar nada.

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# deploy.sh — o ÚNICO comando que a chave SSH do CI consegue executar na VPS.
-# Projeto atlas_stock: instalado em /home/deploy/bin/deploy.sh e chamado como "deploy.sh atlas_stock".
+# deploy.sh — publica um SHA de um projeto na VPS (chamado pelo CD/Rollback via SSH).
+# Projeto bl_atlas_stock (em $APPS_ROOT/bl_atlas_stock): instalado em /home/deploy/bin/deploy.sh.
 #
 # Instalação (uma vez, na VPS):
 #   sudo install -o root -g root -m 755 deploy.sh /home/deploy/bin/deploy.sh
 #
-# ~deploy/.ssh/authorized_keys — uma linha por projeto (uma chave por repositório):
-#   command="/home/deploy/bin/deploy.sh <projeto>",restrict ssh-ed25519 AAAA... gha-deploy-<projeto>
+# Dois modos de chamada (a validação é a mesma nos dois):
+#   1. Chave compartilhada SEM restrição (modo atual): o CI executa
+#        /home/deploy/bin/deploy.sh <projeto> deploy <sha40> [--backup]
+#   2. Chave restrita por forced command (endurecimento recomendado, ver docs/ci-cd.md):
+#        command="/home/deploy/bin/deploy.sh <projeto>",restrict ssh-ed25519 AAAA...
+#      e o comando chega em $SSH_ORIGINAL_COMMAND.
 #
-# O <projeto> vem da linha da chave (confiável): a chave de um repo não publica outro projeto.
-# O comando vem do CI em $SSH_ORIGINAL_COMMAND e é tratado como entrada NÃO confiável:
+# O comando recebido é tratado como entrada NÃO confiável:
 #   deploy <sha40> [--backup]   pull → (backup) → migrate → up --wait → rollback automático se falhar
 #   status                      mostra a tag no ar e o estado dos containers
 #
@@ -25,7 +28,7 @@
 set -Eeuo pipefail
 umask 027
 
-readonly APPS_ROOT="/home/deploy/apps"
+readonly APPS_ROOT="/home/juliobevi/htdocs/bevilabs"
 readonly WAIT_TIMEOUT=180
 readonly LOCK_WAIT=600
 
@@ -33,7 +36,7 @@ log() { printf '[deploy %s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { log "ERRO: $*"; exit 1; }
 
 project="${1:-}"
-[[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || die "projeto inválido na linha do authorized_keys"
+[[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || die "projeto inválido"
 project_dir="$APPS_ROOT/$project"
 [[ -d "$project_dir" ]] || die "diretório $project_dir não existe"
 cd "$project_dir"
@@ -141,7 +144,12 @@ cmd_deploy() {
   die "deploy de $sha falhou (logs da aplicação: 'docker compose logs' na VPS)"
 }
 
-read -r -a args <<< "${SSH_ORIGINAL_COMMAND:-}"
+# Forced command: o comando vem em SSH_ORIGINAL_COMMAND. Chave sem restrição: vem nos argumentos.
+if [[ -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then
+  read -r -a args <<< "$SSH_ORIGINAL_COMMAND"
+else
+  args=("${@:2}")
+fi
 action="${args[0]:-}"
 
 case "$action" in

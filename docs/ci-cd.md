@@ -41,7 +41,7 @@ Roda em todo PR e de novo na `main`, antes de qualquer deploy. O Node vem do `.n
 
 1. **Build uma vez, publica a mesma imagem.** As imagens `ghcr.io/bevilacquajulio/atlas_stock/{api,migrate,web}` são construídas no runner do GitHub com tag igual ao SHA do commit. A VPS não compila nada e não usa `git`: só baixa as imagens.
 2. **Gate de migration.** O commit novo é comparado com o **último deploy bem-sucedido**. Se houver mudança em `backend/prisma/migrations/` nesse intervalo, o deploy vai para o environment `production-db`, que exige aprovação manual e faz backup do banco antes. Sem migration, vai direto para `production`.
-3. **Deploy por SSH com forced command.** A chave do CI só consegue executar `/home/deploy/bin/deploy.sh atlas_stock`. O script valida o SHA, baixa as imagens, faz o backup (quando há migration), roda `prisma migrate deploy`, sobe a nova versão e espera o healthcheck.
+3. **Deploy por SSH.** O CI entra como `deploy` e executa `/home/deploy/bin/deploy.sh bl_atlas_stock deploy <sha>`. O script valida o SHA, baixa as imagens, faz o backup (quando há migration), roda `prisma migrate deploy`, sobe a nova versão e espera o healthcheck.
 4. **Rollback automático.** Se a nova versão não ficar saudável em 180 s, o script volta para a imagem anterior. Também existe o workflow manual `Rollback`.
 5. **Health check público.** Depois do deploy, o runner chama `APP_URL` + `/api/health` para confirmar que Traefik, DNS e TLS respondem.
 
@@ -53,7 +53,7 @@ Um merge que muda só documentação (`*.md`, `docs/`) não publica nada.
 - O login demo (`VITE_DEMO_ADMIN_*`) é opcional e vem das variáveis de repositório de mesmo nome. Ele fica embutido no JS público, então use só uma conta sem privilégios. Sem as variáveis, o botão fica oculto.
 - MySQL compartilhado (`mysql_shared`) com TLS: a CA fica em `secrets/mysql-ca.pem` na pasta do projeto na VPS.
 
-### Na VPS (`/home/deploy/apps/atlas_stock/`)
+### Na VPS (`/home/juliobevi/htdocs/bevilabs/bl_atlas_stock/`)
 
 | Arquivo | Conteúdo |
 |---|---|
@@ -69,6 +69,7 @@ Um merge que muda só documentação (`*.md`, `docs/`) não publica nada.
 | Onde | Nome |
 |---|---|
 | Secrets dos environments `production` e `production-db` | `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS`, `VPS_HOST`, `VPS_USER`, `VPS_PORT` (se não for 22) |
+| (a chave em `VPS_SSH_KEY` é a mesma já autorizada no `authorized_keys` do `deploy`) | |
 | Variáveis do repositório | `APP_URL` (obrigatória), `HEALTH_PATH` (padrão `/api/health`), `VITE_DEMO_ADMIN_EMAIL` e `VITE_DEMO_ADMIN_PASSWORD` (opcionais) |
 
 Os segredos da aplicação ficam só na VPS. O GitHub não conhece nenhum deles.
@@ -84,7 +85,7 @@ Os segredos da aplicação ficam só na VPS. O GitHub não conhece nenhum deles.
 
 - Actions fixadas por SHA (o Dependabot atualiza), permissões mínimas por job e nenhum `pull_request_target`.
 - Os secrets de produção ficam em environments restritos à `main`, então um workflow alterado numa branch não consegue lê-los.
-- A chave SSH do CI não abre shell nem altera infraestrutura. Mudanças em `deploy/` são aplicadas manualmente na VPS **antes** do merge.
+- A chave SSH do CI é a do usuário `deploy`, compartilhada com outros projetos e **sem forced command**: quem tiver essa chave tem shell como `deploy` (grupo `docker`, equivalente a root). Endurecimento recomendado: uma chave por projeto com `command="/home/deploy/bin/deploy.sh bl_atlas_stock",restrict` no `authorized_keys` — o `deploy.sh` já aceita esse modo sem mudança. Mudanças em `deploy/` são aplicadas manualmente na VPS **antes** do merge.
 - Os logs do Actions são públicos: o `deploy.sh` nunca imprime variáveis de ambiente nem logs da aplicação.
 - As imagens rodam sem root (`USER node` e `nginx-unprivileged` na porta 8080).
 
@@ -95,7 +96,7 @@ Os segredos da aplicação ficam só na VPS. O GitHub não conhece nenhum deles.
 | GitHub Flow, só `main` fixa | GitFlow | Deploy contínuo com uma branch publicável é mais simples. |
 | Sem homologação | `staging` na mesma VPS | A VPS tem recursos limitados. A cobertura vem de CI com MySQL real, healthcheck, rollback e gate de migration. |
 | Build no runner + GHCR | `git pull && docker compose build` na VPS (modelo anterior) | Build reproduzível, rastreável pelo SHA e sem consumir CPU da produção. |
-| SSH com forced command | Self-hosted runner | Um runner self-hosted em repo público executaria código de PRs de terceiros na VPS. |
+| SSH como `deploy` (chave compartilhada) | Self-hosted runner | Um runner self-hosted em repo público executaria código de PRs de terceiros na VPS. |
 | API em `/api` relativo | URL absoluta `api.DOMAIN` no build | A mesma imagem serve qualquer domínio, sem CORS entre front e API. |
 | 0 aprovações obrigatórias no PR | 1 aprovação | Projeto solo: o autor não pode aprovar o próprio PR. |
 | Downtime de segundos no `up -d` | Blue/green | Aceitável para o porte do projeto. |

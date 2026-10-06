@@ -1,5 +1,5 @@
 # Compose de PRODUÇÃO do Atlas Stock — usado pelo deploy.sh na VPS.
-# Versionado aqui e copiado MANUALMENTE para /home/deploy/apps/atlas_stock/compose.yml
+# Versionado aqui e copiado MANUALMENTE para /home/juliobevi/htdocs/bevilabs/bl_atlas_stock/compose.yml
 # (a chave SSH do CI só troca a tag da imagem; infraestrutura muda só à mão).
 #
 # Arquivos ao lado dele na VPS:
