@@ -20,7 +20,6 @@ import type {
 } from './dto/projeto.dto';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { traduzirErroEstoque } from '../movimentacoes/estoque-errors';
 
 @Injectable()
 export class ProjetosService {
@@ -199,31 +198,22 @@ export class ProjetosService {
         throw new BadRequestException('Produto inválido ou inativo.');
       }
 
-      try {
-        return await this.prisma.$transaction(async (tx) => {
-          await this.movimentacoesRepo.registrar(
-            {
-              produtoId: input.produtoId!,
-              tipo: 'SAIDA',
-              quantidade: input.quantidade,
-              custoUnitario: Number(produto.custoMedio),
-              motivo: `Consumo projeto #${projetoId}`,
-              usuarioId,
-              projetoId,
-            },
-            tx,
-          );
-
-          return this.repo.createConsumo(projetoId, input, usuarioId, tx);
-        });
-      } catch (error) {
-        throw (
-          traduzirErroEstoque(error, {
-            estoqueInsuficiente:
-              'Estoque insuficiente para registrar este consumo.',
-          }) ?? error
+      return this.prisma.$transaction(async (tx) => {
+        await this.movimentacoesRepo.registrar(
+          {
+            produtoId: input.produtoId!,
+            tipo: 'SAIDA',
+            quantidade: input.quantidade,
+            custoUnitario: Number(produto.custoMedio),
+            motivo: `Consumo projeto #${projetoId}`,
+            usuarioId,
+            projetoId,
+          },
+          tx,
         );
-      }
+
+        return this.repo.createConsumo(projetoId, input, usuarioId, tx);
+      });
     }
 
     return this.repo.createConsumo(projetoId, input, usuarioId);

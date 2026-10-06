@@ -13,11 +13,8 @@ import type {
   CreateCompraInput,
   PagarCompraInput,
 } from './dto/compra.dto';
-import type { CompraStatus, Prisma } from '../../../generated/prisma/client';
+import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-
-const STATUS_MUDOU =
-  'O status da compra foi alterado por outra operação. Atualize e tente novamente.';
 
 const compraInclude = {
   fornecedor: { select: { id: true, nomeRazaoSocial: true } },
@@ -108,13 +105,18 @@ export class ComprasService {
     const dataPagamento = input.dataPagamento ?? new Date();
 
     return this.prisma.$transaction(async (tx) => {
-      await this.reivindicarTransicao(tx, id, 'A_PAGAR', {
-        status: 'PAGO',
-        dataPagamento,
-      });
-      await tx.despesa.updateMany({
-        where: { compraId: id },
-        data: { status: 'PAGO', dataPagamento },
+      await tx.compra.update({
+        where: { id },
+        data: {
+          status: 'PAGO',
+          dataPagamento,
+          despesa: {
+            update: {
+              status: 'PAGO',
+              dataPagamento,
+            },
+          },
+        },
       });
 
       return tx.compra.findUniqueOrThrow({
@@ -138,8 +140,6 @@ export class ComprasService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      await this.reivindicarTransicao(tx, id, 'PAGO', { status: 'CONFIRMADA' });
-
       for (const item of compra.itens) {
         await this.registrarMovimentacao(
           {
@@ -154,6 +154,11 @@ export class ComprasService {
           tx,
         );
       }
+
+      await tx.compra.update({
+        where: { id },
+        data: { status: 'CONFIRMADA' },
+      });
 
       return tx.compra.findUniqueOrThrow({
         where: { id },
@@ -173,8 +178,6 @@ export class ComprasService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      await this.reivindicarTransicao(tx, id, 'CONFIRMADA', { status: 'PAGO' });
-
       for (const item of compra.itens) {
         await this.registrarMovimentacao(
           {
@@ -189,6 +192,11 @@ export class ComprasService {
           tx,
         );
       }
+
+      await tx.compra.update({
+        where: { id },
+        data: { status: 'PAGO' },
+      });
 
       return tx.compra.findUniqueOrThrow({
         where: { id },
@@ -213,13 +221,18 @@ export class ComprasService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      await this.reivindicarTransicao(tx, id, 'PAGO', {
-        status: 'A_PAGAR',
-        dataPagamento: null,
-      });
-      await tx.despesa.updateMany({
-        where: { compraId: id },
-        data: { status: 'A_PAGAR', dataPagamento: null },
+      await tx.compra.update({
+        where: { id },
+        data: {
+          status: 'A_PAGAR',
+          dataPagamento: null,
+          despesa: {
+            update: {
+              status: 'A_PAGAR',
+              dataPagamento: null,
+            },
+          },
+        },
       });
 
       return tx.compra.findUniqueOrThrow({
@@ -241,28 +254,7 @@ export class ComprasService {
       );
     }
 
-    const cancelada = await this.repo.cancelarCompra(id);
-    if (!cancelada) throw new BadRequestException(STATUS_MUDOU);
-    return cancelada;
-  }
-
-  /**
-   * Transição de status como "claim" atômico: o UPDATE só afeta a linha se o
-   * status ainda for o esperado. Em corrida (duplo clique, duas abas) apenas
-   * uma requisição vence; as demais abortam antes de qualquer efeito colateral
-   * (estoque, despesa) e a transação é desfeita.
-   */
-  private async reivindicarTransicao(
-    tx: Prisma.TransactionClient,
-    id: number,
-    de: CompraStatus,
-    data: Prisma.CompraUncheckedUpdateManyInput,
-  ) {
-    const { count } = await tx.compra.updateMany({
-      where: { id, status: de },
-      data,
-    });
-    if (count === 0) throw new BadRequestException(STATUS_MUDOU);
+    return this.repo.cancelarCompra(id);
   }
 
   private async registrarMovimentacao(

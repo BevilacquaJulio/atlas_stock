@@ -10,9 +10,8 @@
 # Se "production-db" não tiver revisor obrigatório (repo privado fora do Enterprise), o gate falha fechado:
 # deploy com migration só sai por Actions → CD → Run workflow com approve_migrations marcado.
 #
-# Pré-requisitos: environments, secrets e VPS configurados (references/vps-setup.md e references/repo-settings.md).
-# Variáveis de repositório: APP_URL (obrigatória), HEALTH_PATH (padrão /api/health),
-# VITE_DEMO_ADMIN_EMAIL / VITE_DEMO_ADMIN_PASSWORD (opcionais: login demo, embutido no JS público).
+# Pré-requisitos: environments, secrets e VPS configurados conforme docs/ci-cd.md.
+# Variáveis públicas: APP_URL e HEALTH_PATH (padrão /api/health/ready).
 
 name: CD
 
@@ -37,8 +36,6 @@ defaults:
 
 env:
   MIGRATIONS_PATH: backend/prisma/migrations/
-  # Script de deploy na VPS + projeto. A chave do CI é a do usuário deploy (compartilhada, sem forced command).
-  DEPLOY_SCRIPT: /home/deploy/bin/deploy.sh bl_atlas_stock
 
 jobs:
   ci:
@@ -71,51 +68,12 @@ jobs:
         id: diff
         env:
           GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-
-          # Base = commit do último deploy que deu certo (production ou production-db).
-          # Comparar com ele, e não só com o push anterior, impede que um merge sem migration
-          # publique uma migration de outro merge que ainda está esperando aprovação.
-          base=""
-          while read -r id sha; do
-            [[ -n "${id:-}" ]] || continue
-            state="$(gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""')"
-            if [[ "$state" == "success" ]]; then base="$sha"; break; fi
-          done < <(gh api "repos/${GITHUB_REPOSITORY}/deployments?per_page=50" \
-                    --jq '.[] | select(.environment == "production" or .environment == "production-db") | "\(.id) \(.sha)"')
-
-          if [[ -z "$base" && -n "${BEFORE:-}" && ! "$BEFORE" =~ ^0+$ ]]; then base="$BEFORE"; fi
-
-          if [[ -n "$base" ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "Base da comparação: $base"
-            files="$(git diff --name-only "$base" "$GITHUB_SHA")"
-          else
-            echo "Sem deploy anterior confiável: tratando o repositório inteiro como alterado."
-            base=""
-            files="$(git ls-files)"
-          fi
-          printf 'Arquivos alterados:\n%s\n' "$files"
-
-          not_deployable='^(CHANGELOG\.md|version\.txt|\.release-please-manifest\.json|LICENSE|docs/.*|\.github/ISSUE_TEMPLATE/.*|\.github/dependabot\.yml|.*\.md)$'
-          deployable=false; migrations=false; infra=false
-          if [[ -n "$files" ]] && grep -qvE "$not_deployable" <<< "$files"; then deployable=true; fi
-          if grep -q "^${MIGRATIONS_PATH}" <<< "$files"; then migrations=true; fi
-          if grep -q '^deploy/' <<< "$files"; then infra=true; fi
-
-          {
-            echo "deployable=$deployable"
-            echo "migrations=$migrations"
-            echo "infra=$infra"
-            echo "base=$base"
-          } >> "$GITHUB_OUTPUT"
-          echo "deployable=$deployable migrations=$migrations infra=$infra"
+        run: bash scripts/deploy-changes.sh
 
   build:
     name: build (${{ matrix.image }})
     needs: [ci, changes]
-    if: needs.changes.outputs.deployable == 'true'
+    if: needs.changes.outputs.deployable == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -163,10 +121,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          # Só o Dockerfile do front declara estes ARGs; os demais ignoram. Vazio = botão de demo oculto.
-          build-args: |
-            VITE_DEMO_ADMIN_EMAIL=${{ vars.VITE_DEMO_ADMIN_EMAIL }}
-            VITE_DEMO_ADMIN_PASSWORD=${{ vars.VITE_DEMO_ADMIN_PASSWORD }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.image }}
@@ -175,10 +129,12 @@ jobs:
   deploy:
     name: deploy
     needs: [changes, build]
-    if: needs.changes.outputs.deployable == 'true'
+    if: needs.changes.outputs.deployable == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      contents: read # checkout e conferência do commit atual da main
+      deployments: write # registrar o SHA realmente publicado após o health check
       actions: read # ler as regras de proteção do environment production-db (gate de migration)
     environment:
       name: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
@@ -187,6 +143,16 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validar configuração pública antes do deploy
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health/ready' }}
+        run: node scripts/deploy-url.mjs
+
       # Falha fechado: se production-db não exige revisor (plano/visibilidade sem esse recurso, ou revisor removido),
       # o job chegou aqui sem aprovação. Nesse caso só segue com disparo manual explícito.
       - name: Gate de migration
@@ -195,19 +161,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           APPROVED: ${{ inputs.approve_migrations }}
-        run: |
-          reviewers="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-db" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' 2>/dev/null || echo 0)"
-          if [[ "$reviewers" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Migration nova aprovada no environment production-db ($reviewers revisor(es))."
-            exit 0
-          fi
-          if [[ "$EVENT" == "workflow_dispatch" && "$APPROVED" == "true" ]]; then
-            echo "::notice title=Migration aprovada manualmente::Disparo manual com approve_migrations. Backup antes da migration."
-            exit 0
-          fi
-          echo "::error title=Deploy com migration bloqueado::production-db não tem revisor obrigatório, então não houve aprovação. Revise as migrations e rode Actions → CD → Run workflow (main) marcando approve_migrations."
-          exit 1
+        run: bash scripts/migration-gate.sh
 
       - name: Aviso — arquivos de infraestrutura mudaram
         if: needs.changes.outputs.infra == 'true'
@@ -218,10 +172,16 @@ jobs:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
+          [[ -n "$SSH_KEY" && -n "$KNOWN_HOSTS" ]]
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Bloquear execução antiga antes de alterar a VPS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check-deploy-target.sh
 
       - name: Deploy na VPS
         env:
@@ -231,7 +191,8 @@ jobs:
           SHA: ${{ github.sha }}
           MIGRATIONS: ${{ needs.changes.outputs.migrations }}
         run: |
-          remote_cmd="$DEPLOY_SCRIPT deploy $SHA"
+          [[ -n "$VPS_HOST" && -n "$VPS_USER" ]]
+          remote_cmd="deploy $SHA"
           if [[ "$MIGRATIONS" == "true" ]]; then remote_cmd="$remote_cmd --backup"; fi
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "$remote_cmd"
@@ -239,16 +200,16 @@ jobs:
       - name: Health check público
         env:
           APP_URL: ${{ vars.APP_URL }}
-          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health' }}
-        run: |
-          if [[ -z "$APP_URL" ]]; then echo "::warning::APP_URL não definida; health check público pulado."; exit 0; fi
-          url="${APP_URL%/}${HEALTH_PATH}"
-          for attempt in $(seq 1 10); do
-            if curl -fsS --max-time 10 -o /dev/null "$url"; then echo "OK: $url (tentativa $attempt)"; exit 0; fi
-            sleep 6
-          done
-          echo "::error title=Health check público falhou::$url não respondeu 2xx. O container subiu saudável na VPS; investigue Traefik/DNS e, se preciso, rode o workflow Rollback."
-          exit 1
+          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health/ready' }}
+        run: bash scripts/public-health.sh
+
+      - name: Registrar versão publicada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          ENV_NAME: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: bash scripts/record-deployment.sh
 
       - name: Resumo
         if: always()

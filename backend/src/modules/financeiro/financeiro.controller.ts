@@ -1,4 +1,3 @@
-import { Throttle } from '@nestjs/throttler';
 import {
   Body,
   Controller,
@@ -37,7 +36,6 @@ export class FinanceiroController {
     return this.service.statusDesbloqueio(user);
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('desbloquear')
   desbloquear(
     @Body() dto: DesbloquearDto,

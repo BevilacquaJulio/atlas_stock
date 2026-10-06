@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  BadRequestException,
   ConflictException,
   NotFoundException,
   UnauthorizedException,
@@ -80,42 +79,5 @@ describe('FinanceiroService', () => {
     await expect(
       service.createCategoriaDespesa({ nome: 'Operacional', ativo: true }),
     ).rejects.toBeInstanceOf(ConflictException);
-  });
-
-  describe('pagarDespesa', () => {
-    it('rejeita despesa gerada por compra', async () => {
-      repo.findDespesaById.mockResolvedValue({
-        id: 1,
-        status: 'A_PAGAR',
-        compraId: 5,
-      });
-      await expect(service.pagarDespesa(1)).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
-      expect(repo.pagarDespesa).not.toHaveBeenCalled();
-    });
-
-    it('rejeita despesa cancelada', async () => {
-      repo.findDespesaById.mockResolvedValue({
-        id: 1,
-        status: 'CANCELADA',
-        compraId: null,
-      });
-      await expect(service.pagarDespesa(1)).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
-      expect(repo.pagarDespesa).not.toHaveBeenCalled();
-    });
-
-    it('paga despesa avulsa a pagar', async () => {
-      repo.findDespesaById.mockResolvedValue({
-        id: 1,
-        status: 'A_PAGAR',
-        compraId: null,
-      });
-      repo.pagarDespesa.mockResolvedValue({ id: 1, status: 'PAGO' });
-      const result = await service.pagarDespesa(1);
-      expect(result.status).toBe('PAGO');
-    });
   });
 });

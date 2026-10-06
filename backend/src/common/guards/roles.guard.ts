@@ -5,10 +5,10 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Request } from 'express';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import type { Cargo } from '../../../generated/prisma/client';
 import type { AuthenticatedUser } from '../types/authenticated-user';
-import { getRequest } from '../http/get-request';
 
 /**
  * Guard de RBAC. Lê os cargos exigidos via @Roles e compara com o cargo do
@@ -25,7 +25,7 @@ export class RolesGuard implements CanActivate {
     ]);
     if (!requiredRoles || requiredRoles.length === 0) return true;
 
-    const request = getRequest(context);
+    const request = context.switchToHttp().getRequest<Request>();
     const user = request.user as AuthenticatedUser | undefined;
 
     if (!user || !requiredRoles.includes(user.cargo)) {

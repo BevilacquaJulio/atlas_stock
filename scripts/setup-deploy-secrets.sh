@@ -4,12 +4,12 @@
 # RODE VOCÊ MESMO, na sua máquina. Não peça a um agente de IA: a chave privada passa por este processo.
 #
 # Uso (na raiz do repositório, depois de rodar apply-repo-settings.sh):
-#   bash <skill>/scripts/setup-deploy-secrets.sh <projeto> <host-ou-ip> [porta=22] [usuario=deploy]
+#   bash scripts/setup-deploy-secrets.sh bl_atlas_stock <host-ou-ip> [porta=22] [usuario=deploy]
 #
 # O que faz:
 #   1. gera uma chave ed25519 nova numa pasta temporária (apagada no fim);
 #   2. captura a chave pública da VPS e pede para você conferir o fingerprint;
-#   3. cadastra VPS_SSH_KEY, VPS_KNOWN_HOSTS, VPS_HOST, VPS_USER (e VPS_PORT se != 22)
+#   3. cadastra VPS_SSH_KEY, VPS_KNOWN_HOSTS, VPS_HOST, VPS_USER e VPS_PORT
 #      nos environments production e production-db;
 #   4. imprime a linha para o authorized_keys da VPS, já restrita ao deploy.sh deste projeto.
 #
@@ -61,16 +61,14 @@ for env in "${environments[@]}"; do
   gh secret set VPS_KNOWN_HOSTS --repo "$repo" --env "$env" < "$tmp/known_hosts"
   gh secret set VPS_HOST        --repo "$repo" --env "$env" --body "$host"
   gh secret set VPS_USER        --repo "$repo" --env "$env" --body "$user"
-  if [[ "$port" != "22" ]]; then
-    gh secret set VPS_PORT      --repo "$repo" --env "$env" --body "$port"
-  fi
+  gh secret set VPS_PORT        --repo "$repo" --env "$env" --body "$port"
   echo "    $env: ok"
 done
 
 echo
 echo "==> Adicione esta linha em ~$user/.ssh/authorized_keys na VPS (uma linha só):"
 echo
-printf 'command="/home/%s/bin/deploy.sh %s",restrict %s\n' "$user" "$project" "$(cat "$tmp/key.pub")"
+printf 'command="/home/%s/bin/deploy-atlas-stock.sh %s",restrict %s\n' "$user" "$project" "$(cat "$tmp/key.pub")"
 echo
 echo "A chave privada existe agora só nos secrets do GitHub; a cópia local será apagada."
 echo "Para trocar a chave no futuro: rode este script de novo e substitua a linha no authorized_keys."

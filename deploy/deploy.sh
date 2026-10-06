@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # deploy.sh — publica um SHA de um projeto na VPS (chamado pelo CD/Rollback via SSH).
-# Projeto bl_atlas_stock (em $APPS_ROOT/bl_atlas_stock): instalado em /home/deploy/bin/deploy.sh.
+# Projeto bl_atlas_stock (em $APPS_ROOT/bl_atlas_stock): instalado em /home/deploy/bin/deploy-atlas-stock.sh.
 #
 # Instalação (uma vez, na VPS):
-#   sudo install -o root -g root -m 755 deploy.sh /home/deploy/bin/deploy.sh
+#   sudo install -o root -g root -m 755 deploy.sh /home/deploy/bin/deploy-atlas-stock.sh
 #
-# Dois modos de chamada (a validação é a mesma nos dois):
-#   1. Chave compartilhada SEM restrição (modo atual): o CI executa
-#        /home/deploy/bin/deploy.sh <projeto> deploy <sha40> [--backup]
-#   2. Chave restrita por forced command (endurecimento recomendado, ver docs/ci-cd.md):
-#        command="/home/deploy/bin/deploy.sh <projeto>",restrict ssh-ed25519 AAAA...
-#      e o comando chega em $SSH_ORIGINAL_COMMAND.
+# A chave exclusiva do CI deve ter forced command no authorized_keys (ver docs/ci-cd.md):
+#   command="/home/deploy/bin/deploy-atlas-stock.sh bl_atlas_stock",restrict ssh-ed25519 AAAA...
+# O CI envia "deploy <sha40> [--backup]" em SSH_ORIGINAL_COMMAND.
+# Para operação local por um administrador: deploy.sh <projeto> deploy <sha40> [--backup].
 #
 # O comando recebido é tratado como entrada NÃO confiável:
 #   deploy <sha40> [--backup]   pull → (backup) → migrate → up --wait → rollback automático se falhar
@@ -36,7 +34,7 @@ log() { printf '[deploy %s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { log "ERRO: $*"; exit 1; }
 
 project="${1:-}"
-[[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || die "projeto inválido"
+[[ "$project" == "bl_atlas_stock" ]] || die "este executor atende somente bl_atlas_stock"
 project_dir="$APPS_ROOT/$project"
 [[ -d "$project_dir" ]] || die "diretório $project_dir não existe"
 cd "$project_dir"
@@ -60,7 +58,7 @@ set_tag() {
   if [[ -f .env ]]; then
     grep -v '^IMAGE_TAG=' .env > "$tmp" || true
   fi
-  printf 'IMAGE_TAG=%s\n' "$sha" >> "$tmp"
+  if [[ -n "$sha" ]]; then printf 'IMAGE_TAG=%s\n' "$sha" >> "$tmp"; fi
   chmod 600 "$tmp"
   mv -f "$tmp" .env
 }
@@ -70,13 +68,16 @@ cleanup_images() {
   local keep_a=$1 keep_b=${2:-} repo ref tag
   while read -r repo; do
     [[ -n "$repo" ]] || continue
+    case "$repo" in
+      ghcr.io/bevilacquajulio/atlas_stock/api|ghcr.io/bevilacquajulio/atlas_stock/migrate|ghcr.io/bevilacquajulio/atlas_stock/web) ;;
+      *) continue ;;
+    esac
     while read -r ref; do
       tag="${ref##*:}"
       [[ "$tag" == "$keep_a" || ( -n "$keep_b" && "$tag" == "$keep_b" ) ]] && continue
       docker image rm "$ref" > /dev/null 2>&1 || true
     done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' "$repo")
   done < <(IMAGE_TAG="$keep_a" dc --profile migrate config --images | grep '^ghcr\.io/' | sed 's/:[^:/]*$//' | sort -u)
-  docker image prune -f > /dev/null 2>&1 || true
 }
 
 record() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >> .deploy-history; }
@@ -139,6 +140,7 @@ cmd_deploy() {
       log "ATENÇÃO: o rollback também não ficou saudável — intervenção manual necessária"
     fi
   else
+    set_tag "$previous"
     log "sem versão anterior registrada para rollback"
   fi
   die "deploy de $sha falhou (logs da aplicação: 'docker compose logs' na VPS)"

@@ -6,9 +6,7 @@ import axios, {
 import { tokenStore } from './token-store';
 import { financeiroUnlockStore } from './financeiro-unlock';
 
-// Caminho relativo: em produção o Traefik roteia /api para a API (mesma origem);
-// no dev o Vite faz proxy de /api. VITE_API_URL só sobrescreve quando necessário.
-const baseURL = import.meta.env.VITE_API_URL?.trim() || '/api';
+const baseURL = import.meta.env.VITE_API_URL ?? '/api';
 
 /** Cliente HTTP central. Toda chamada à API passa por aqui. */
 export const api = axios.create({ baseURL });

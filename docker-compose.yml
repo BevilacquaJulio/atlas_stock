@@ -1,12 +1,8 @@
-# Build LOCAL/manual (docker compose up -d --build). Produção usa deploy/compose.prod.yml
-# com imagens do GHCR publicadas pelo CD (ver docs/ci-cd.md).
 services:
   # ─────────────────────────── API (NestJS) ───────────────────────────
   api:
     image: bl_atlas_stock-api
-    build:
-      context: ./backend
-      target: runtime
+    build: ./backend
     container_name: bl_g5-api
     restart: unless-stopped
     env_file:
@@ -37,13 +33,6 @@ services:
     image: bl_atlas_stock-app
     build:
       context: ./frontend
-      target: runtime
-      args:
-        # O front chama /api relativo (Traefik roteia por path); sem URL no build.
-        # Login demo: vazio por padrao (botao oculto). Qualquer valor aqui vai
-        # para o JS publico; use SOMENTE uma conta sem privilegios.
-        VITE_DEMO_ADMIN_EMAIL: ${VITE_DEMO_ADMIN_EMAIL:-}
-        VITE_DEMO_ADMIN_PASSWORD: ${VITE_DEMO_ADMIN_PASSWORD:-}
     container_name: bl_g5-app
     restart: unless-stopped
     depends_on:
@@ -68,8 +57,8 @@ services:
     cpus: 0.25
 
   # ─────────────── Migrator one-off (Prisma migrate deploy) ────────────
-  # Nao sobe com `up` (profile "tools"). Usa o target migrate do backend
-  # (CLI do Prisma + schema + migrations). Roda manualmente:
+  # Nao sobe com `up` (profile "tools"). Usa o stage de build do backend,
+  # que tem a CLI do Prisma + schema + migrations. Roda manualmente:
   #   docker compose run --rm migrate
   migrate:
     image: bl_atlas_stock-migrate
@@ -85,6 +74,7 @@ services:
       - ./secrets/mysql-ca.pem:/run/secrets/mysql-ca.pem:ro
     networks:
       - mysql_shared
+    command: ["npx", "prisma", "migrate", "deploy"]
     mem_limit: 512m
     cpus: 0.5
 

@@ -37,7 +37,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ci-root
-          MYSQL_DATABASE: atlas_ci
+          MYSQL_DATABASE: atlas_stock_ci
         ports:
           - 3306:3306
         options: >-
@@ -52,11 +52,13 @@ jobs:
       MYSQL_PORT: "3306"
       MYSQL_USER: root
       MYSQL_PASSWORD: ci-root
-      MYSQL_DATABASE: atlas_ci
+      MYSQL_DATABASE: atlas_stock_ci
       MYSQL_SSL: "false"
       # Valores descartáveis só para a validação de env (src/config/env.validation.ts) passar. Não são segredos.
       JWT_ACCESS_SECRET: ci-access-secret-not-a-real-secret-0000000000
       JWT_REFRESH_SECRET: ci-refresh-secret-not-a-real-secret-000000000
+      CORS_ORIGIN: http://localhost:5173
+      PORT: "3100"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,8 +103,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Bloqueia só vulnerabilidade CRÍTICA em dependências de produção: as "high" restantes
-      # (cadeia Prisma/mariadb) não têm correção sem quebra de major.
+      - name: Integração com API compilada e MySQL real
+        run: npm run test:e2e
+
+      # Os alertas não críticos permanecem visíveis para os próximos PRs.
       - name: Auditoria de dependências
         run: npm audit --omit=dev --audit-level=critical
 
@@ -140,7 +144,7 @@ jobs:
         run: npm run build
 
       - name: Auditoria de dependências
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --audit-level=critical
 
   docker:
     name: docker (${{ matrix.image }})
@@ -185,6 +189,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Actions fixadas por SHA
+        run: node scripts/check-action-pins.mjs
+
+      - name: Testes das proteções de deploy
+        run: |
+          node --test scripts/pipeline.test.mjs
+          node --test scripts/tests/deploy.test.mjs
+          bash scripts/tests/pipeline.sh
+
       - name: actionlint
         run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
 
@@ -196,7 +213,7 @@ jobs:
       - name: shellcheck dos scripts de deploy
         run: |
           shopt -s nullglob
-          files=(deploy/*.sh deploy/hooks/*.sh scripts/*.sh)
+          files=(deploy/*.sh deploy/hooks/*.sh scripts/*.sh scripts/tests/*.sh)
           if (( ${#files[@]} )); then shellcheck "${files[@]}"; else echo "Nenhum script para checar."; fi
 
       - name: Compose de produção válido
@@ -205,7 +222,7 @@ jobs:
           DOMAIN: ci.example.test
         run: |
           cd deploy
-          touch .env.production
+          touch .env.production .env.migrate
           docker compose -f compose.prod.yml --profile migrate config --quiet
 
   ci-ok:
@@ -216,14 +233,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Conferir resultado de todos os jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          echo "Resultados: $RESULTS"
-          for result in $RESULTS; do
-            case "$result" in
-              success|skipped) ;;
-              *) echo "::error::Pelo menos um job obrigatório terminou como '$result'."; exit 1 ;;
-            esac
-          done
+        run: bash scripts/check-ci-results.sh

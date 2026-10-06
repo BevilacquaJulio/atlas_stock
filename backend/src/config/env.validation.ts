@@ -4,8 +4,7 @@ import { z } from 'zod';
  * Schema Zod para process.env. Validado no boot (app.module) — falha rápido
  * se faltar/estiver inválida qualquer variável obrigatória.
  */
-export const envSchema = z
-  .object({
+export const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
     .default('development'),
@@ -31,11 +30,7 @@ export const envSchema = z
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   THROTTLE_TTL: z.coerce.number().int().positive().default(60),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(120),
-  })
-  .refine((env) => env.MYSQL_SSL !== 'true' || !!env.MYSQL_SSL_CA_PATH?.trim(), {
-    path: ['MYSQL_SSL_CA_PATH'],
-    message: 'MYSQL_SSL_CA_PATH é obrigatório quando MYSQL_SSL=true.',
-  });
+});
 
 export type Env = z.infer<typeof envSchema>;
 

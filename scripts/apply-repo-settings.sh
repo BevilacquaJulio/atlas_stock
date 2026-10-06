@@ -5,17 +5,25 @@
 #   environments production / production-db, ruleset da main e variáveis APP_URL/HEALTH_PATH.
 #
 # Uso (na raiz do repositório, com o gh autenticado como dono/admin do repo):
-#   APP_URL=https://app.example.com bash <skill>/scripts/apply-repo-settings.sh [owner/repo]
-# Opcionais: HEALTH_PATH=/api/health   RULESET_FILE=.github/rulesets/main.json   WITH_RELEASE=1 (cria o environment release)
+#   APP_URL=https://seu-dominio bash scripts/apply-repo-settings.sh [owner/repo]
+# Opcionais: HEALTH_PATH=/api/health/ready   RULESET_FILE=.github/rulesets/main.json   WITH_RELEASE=1 (cria o environment release)
 #
 # Idempotente: pode rodar de novo sem duplicar nada.
 # Altera configurações do repositório — um agente só deve rodar com autorização explícita do usuário.
 
 set -euo pipefail
 
+# Git Bash não deve converter /api/... em caminho Windows ao chamar Node ou gh.
+if [[ "${OSTYPE:-}" == msys* ]]; then
+  export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}HEALTH_PATH"
+fi
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+node "$script_dir/deploy-url.mjs" > /dev/null
+
 repo="${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
 ruleset_file="${RULESET_FILE:-.github/rulesets/main.json}"
-health_path="${HEALTH_PATH:-/api/health}"
+health_path="${HEALTH_PATH:-/api/health/ready}"
 
 step() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'AVISO: %s\n' "$*" >&2; }
@@ -61,8 +69,18 @@ JSON
 fi
 
 ensure_main_policy() {
-  local env=$1
-  if ! gh api "repos/$repo/environments/$env/deployment-branch-policies" --jq '.branch_policies[].name' | grep -qx main; then
+  local env=$1 policies id name type has_main=false
+  policies="$(gh api --paginate "repos/$repo/environments/$env/deployment-branch-policies?per_page=100" \
+    --jq '.branch_policies[] | "\(.id)\t\(.name)\t\(.type)"')"
+  while IFS=$'\t' read -r id name type; do
+    [[ -n "$id" ]] || continue
+    if [[ "$name" == main && "$type" == branch ]]; then
+      has_main=true
+    else
+      gh api -X DELETE "repos/$repo/environments/$env/deployment-branch-policies/$id" --silent
+    fi
+  done <<< "$policies"
+  if [[ "$has_main" == false ]]; then
     gh api -X POST "repos/$repo/environments/$env/deployment-branch-policies" --silent -f name=main -f type=branch
   fi
 }
@@ -97,7 +115,7 @@ JSON
 fi
 
 step "Ruleset da main ($ruleset_file)"
-actions_app_id="$(gh api /apps/github-actions --jq .id 2>/dev/null || true)"
+actions_app_id="$(gh api apps/github-actions --jq .id 2>/dev/null || true)"
 if [[ -n "$actions_app_id" && "$actions_app_id" != "15368" ]]; then
   warn "o ID do app GitHub Actions é $actions_app_id, mas o ruleset usa 15368 — ajuste integration_id em $ruleset_file"
 fi
@@ -113,17 +131,13 @@ else
 fi
 
 step "Variáveis do repositório"
-if [[ -n "${APP_URL:-}" ]]; then
-  gh variable set APP_URL --repo "$repo" --body "$APP_URL"
-  gh variable set HEALTH_PATH --repo "$repo" --body "$health_path"
-else
-  warn "APP_URL não informada — defina depois: gh variable set APP_URL --repo $repo --body https://..."
-fi
+gh variable set APP_URL --repo "$repo" --body "$APP_URL"
+MSYS_NO_PATHCONV=1 gh variable set HEALTH_PATH --repo "$repo" --body "$health_path"
 
 step "Pronto"
 cat <<EOF
 Próximos passos (você, não o agente):
   1. Rode scripts/setup-deploy-secrets.sh para criar a chave do CI e cadastrar os secrets nos dois environments.
-  2. Prepare a VPS conforme references/vps-setup.md (deploy.sh, authorized_keys, compose, .env.production, hook de backup).
+  2. Prepare a VPS conforme docs/ci-cd.md (deploy.sh, authorized_keys, compose, .env.production, hook de backup).
   3. Abra um PR de teste e confira se os checks ci-ok e pr-title aparecem e bloqueiam o merge até ficarem verdes.
 EOF

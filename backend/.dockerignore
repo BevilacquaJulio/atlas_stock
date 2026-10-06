@@ -1,12 +1,11 @@
 node_modules
 dist
-coverage
-.git
-.github
+generated
 .env
 .env.*
 !.env.example
+.git
+.gitignore
 *.log
-Dockerfile*
-.dockerignore
-generated
+coverage
+test

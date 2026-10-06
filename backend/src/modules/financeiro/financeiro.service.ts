@@ -102,16 +102,8 @@ export class FinanceiroService {
 
   async pagarDespesa(id: number, dataPagamento?: Date) {
     const despesa = await this.findDespesa(id);
-    if (despesa.compraId) {
-      throw new BadRequestException(
-        'Despesas geradas por compras são pagas pela própria compra.',
-      );
-    }
     if (despesa.status === 'PAGO') {
       throw new BadRequestException('Despesa já está paga.');
-    }
-    if (despesa.status !== 'A_PAGAR') {
-      throw new BadRequestException('Somente despesas a pagar podem ser pagas.');
     }
     return this.repo.pagarDespesa(id, dataPagamento ?? new Date());
   }

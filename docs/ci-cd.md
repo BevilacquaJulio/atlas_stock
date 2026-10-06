@@ -1,115 +1,167 @@
-# CI/CD
+# GitHub Actions e deploy do Atlas Stock
 
-Este documento descreve como o código do Atlas Stock sai de uma branch e chega em produção, e explica cada decisão do caminho.
+## Fluxo diário
 
-## Visão geral
+Crie uma branch por implementação, faça commit e push e abra um PR para main.
+A CI e o check de título rodam na abertura e em cada novo push. O merge usa squash
+com título Conventional Commits, por exemplo feat(produtos): adiciona filtro.
+A main exige ci-ok, pr-title, branch atualizada e conversas resolvidas.
+Não há aprovação obrigatória de outro revisor neste projeto individual.
 
-```mermaid
-flowchart LR
-  A[branch feat/*] -->|pull request| B{CI}
-  B -->|lint, typecheck, testes, migrations, build, docker| C[ci-ok]
-  C -->|squash merge| D[main]
-  D --> E[CI de novo na main]
-  E --> F[imagens no GHCR com tag = SHA]
-  F --> G{migration nova desde o último deploy?}
-  G -->|não| H[deploy automático]
-  G -->|sim| I[aprovação manual + backup] --> H
-  H --> J[VPS: pull, migrate, up --wait]
-  J -->|saudável| K[no ar]
-  J -->|não saudável| L[rollback automático]
+Após o merge, CD valida a main novamente, constrói as imagens no runner e
+publica ghcr.io/bevilacquajulio/atlas_stock/{api,migrate,web}:<SHA completo>.
+A VPS baixa as imagens; não executa git pull nem compila o projeto.
+Mudanças só de documentação não publicam se não houver código pendente desde
+um deploy anterior confiável. Run workflow republica mesmo sem mudanças.
+
+## Mapa do sistema
+
+| Item | Valor | Fonte |
+|---|---|---|
+| Repositório | BevilacquaJulio/atlas_stock, público | GitHub e decisão do responsável |
+| Código adotado | atlas_stock_novo; histórico anterior preservado | Decisão do responsável |
+| Aplicativos | NestJS 11/Prisma 7 e React 19/Vite | package.json de cada aplicação |
+| Pacotes | npm, lockfile separado por aplicação | backend/ e frontend/ |
+| Node | 24 na CI e nos Dockerfiles | .nvmrc e Dockerfiles |
+| Banco | MySQL 8.4 compartilhado; testes isolados | Configuração existente e CI |
+| Configuração do banco | MYSQL_*; TLS com CA em produção | prisma.config.ts e database-url.ts |
+| Migrations | backend/prisma/migrations/ | Schema e migrations existentes |
+| Frontend | https://atlastock.bevilabs.com.br | Destino confirmado |
+| API | https://api.atlastock.bevilabs.com.br | Destino confirmado |
+| Health | /api/health/ready, HTTP 503 sem banco | HealthController |
+| VPS | /home/juliobevi/htdocs/bevilabs/bl_atlas_stock | Destino confirmado |
+| SSH | deploy, chave exclusiva e executor exclusivo | Contrato do pipeline |
+
+O frontend usa /api. Traefik encaminha esse prefixo no domínio principal e
+preserva o subdomínio da API. Nginx serve a SPA como usuário sem root na 8080.
+O login demo fica desativado por padrão e não recebe credenciais no build.
+
+## Validações e migrations
+
+A CI roda lint sem --fix, typecheck, testes e build de ambas as aplicações.
+A API aplica as cinco migrations num MySQL descartável atlas_stock_ci e compara
+o resultado com o schema. O e2e recusa banco diferente e verifica API compilada,
+login, proteção de rotas e persistência de categoria. Também são construídas as
+três imagens e verificados YAML, pinning, Bash e proteções do deploy.
+A auditoria npm bloqueia vulnerabilidades críticas de produção; os demais alertas
+continuam visíveis. Não se usa continue-on-error para esconder falhas.
+
+Migrations não são editadas depois de publicadas. Mudanças de schema exigem uma
+migration no mesmo PR. Alterações destrutivas exigem expand/contract, pois a
+migration roda enquanto o código anterior ainda atende. Rollback não desfaz DDL.
+
+O CD compara com o último deploy bem-sucedido da task atlas-stock, incluindo
+rollbacks. Sem histórico confiável, todas as migrations entram no gate do primeiro
+deploy. production-db exige aprovação; sem revisor configurado, o deploy fica
+bloqueado até Run workflow na main com approve_migrations explicitamente marcado.
+O backup é obrigatório nesse caminho. Erro consultando o histórico impede o CD.
+
+CD e rollback compartilham a fila e o executor usa flock. Uma execução automática
+antiga não publica se a main avançou. Após pull e migration, o Compose aguarda
+saúde por 180 segundos. Falha tenta restaurar a imagem anterior; no primeiro
+deploy não existe versão anterior. Falha no pull, backup ou migration aborta.
+A limpeza se restringe às imagens do Atlas Stock, sem prune global.
+
+O CD verifica frontend, prontidão no domínio principal e prontidão no subdomínio
+API antes de registrar sucesso. Falha de DNS/TLS não causa rollback automático:
+a versão pode estar saudável internamente; o workflow falha para investigação.
+
+## Configurar o GitHub
+
+No Git Bash, com GitHub CLI autenticado, após revisar os arquivos:
+
+```bash
+APP_URL=https://atlastock.bevilabs.com.br HEALTH_PATH=/api/health/ready \
+  bash scripts/apply-repo-settings.sh BevilacquaJulio/atlas_stock
 ```
 
-## Fluxo de trabalho
+O script configura squash, ruleset, Dependabot, permissões e environments
+production e production-db, restritos à branch main. APP_URL é obrigatória.
+Secrets SSH existem nos dois environments, nunca em nível de repo:
+VPS_SSH_KEY, VPS_KNOWN_HOSTS, VPS_HOST, VPS_USER e VPS_PORT.
 
-- `main` é a única branch fixa e está sempre publicável. O ruleset (`.github/rulesets/main.json`) bloqueia push direto e exige pull request.
-- Cada mudança nasce numa branch curta (`feat/...`, `fix/...`) e entra por PR com **squash merge**. O título do PR segue Conventional Commits (`feat(compras): ...`) e vira o commit na `main`.
-- O merge só é liberado com os checks `ci-ok` e `pr-title` verdes e com a branch atualizada em relação à `main`.
+Execute você mesmo, substituindo o argumento pelo host que já utiliza:
 
-## CI (`.github/workflows/ci.yml`)
+```bash
+bash scripts/setup-deploy-secrets.sh bl_atlas_stock <host-da-vps> 22 deploy
+```
 
-Roda em todo PR e de novo na `main`, antes de qualquer deploy. O Node vem do `.nvmrc` (24, a mesma major das imagens).
+Compare o fingerprint com ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+executado na VPS. O script gera a chave, cadastra os secrets e imprime:
 
-| Job | O que garante |
+```text
+command="/home/deploy/bin/deploy-atlas-stock.sh bl_atlas_stock",restrict ssh-ed25519 ...
+```
+
+Acrescente essa linha em /home/deploy/.ssh/authorized_keys. Preserve as linhas
+e o executor do toolbox. A chave do CI aceita apenas deploy/status deste projeto.
+
+Pacotes GHCR precisam estar acessíveis ao usuário deploy. Pacotes públicos podem
+ser baixados sem login; pacotes privados exigem docker login ghcr.io na VPS com
+credencial de leitura. A criação de pacotes não garante visibilidade pública.
+
+## Preparar a VPS antes do merge
+
+MySQL e Traefik já existem e os containers da aplicação foram removidos. Não
+recrie ou apague a infraestrutura nem os volumes do banco. Confirme as redes
+mysql_shared e traefik, o banco existente e o DNS dos dois domínios.
+
+Copie manualmente os arquivos deste PR, usando seu acesso administrativo:
+
+| Repositório | Destino |
 |---|---|
-| `api` | Em `backend/`: `npm ci`, `prisma generate`, `lint:check`, `typecheck`, testes (vitest), build e `npm audit` (bloqueia só vulnerabilidade crítica de produção). Num **MySQL 8.4 real** (service container), aplica todas as migrations do zero e confere se `schema.prisma` e migrations estão em sincronia. |
-| `web` | Em `frontend/`: `lint:check`, `typecheck`, testes, build e `npm audit` (high). |
-| `docker` | As imagens `api` (target `runtime`), `migrate` e `web` buildam. Nada é publicado a partir de PR. |
-| `workflows` | actionlint, zizmor (segurança dos workflows), shellcheck de `deploy/` e `scripts/`, e validação do `deploy/compose.prod.yml`. |
-| `ci-ok` | Agregador. É o único check de CI exigido pelo ruleset. |
+| deploy/deploy.sh | /home/deploy/bin/deploy-atlas-stock.sh, root:root, modo 755 |
+| deploy/compose.prod.yml | pasta do projeto/compose.yml |
+| deploy/hooks/pre-migrate.sh | pasta do projeto/hooks/pre-migrate.sh, executável |
+| deploy/.env.example | referência para pasta do projeto/.env |
+| backend/.env.example | referência para pasta do projeto/.env.production |
+| deploy/.env.migrate.example | referência para pasta do projeto/.env.migrate |
+| deploy/.env.backup.example | referência para pasta do projeto/.env.backup |
 
-## CD (`.github/workflows/cd.yml`)
+A pasta do projeto é /home/juliobevi/htdocs/bevilabs/bl_atlas_stock.
+O usuário deploy precisa atravessar os diretórios pais e ler esses arquivos.
+Crie também secrets/ e backups/. Configure o dono deploy e modo 600 nos ambientes.
+Preserve valores existentes; exemplos não são segredos válidos. Nunca envie
+arquivos de ambiente reais ao GitHub.
 
-1. **Build uma vez, publica a mesma imagem.** As imagens `ghcr.io/bevilacquajulio/atlas_stock/{api,migrate,web}` são construídas no runner do GitHub com tag igual ao SHA do commit. A VPS não compila nada e não usa `git`: só baixa as imagens.
-2. **Gate de migration.** O commit novo é comparado com o **último deploy bem-sucedido**. Se houver mudança em `backend/prisma/migrations/` nesse intervalo, o deploy vai para o environment `production-db`, que exige aprovação manual e faz backup do banco antes. Sem migration, vai direto para `production`.
-3. **Deploy por SSH.** O CI entra como `deploy` e executa `/home/deploy/bin/deploy.sh bl_atlas_stock deploy <sha>`. O script valida o SHA, baixa as imagens, faz o backup (quando há migration), roda `prisma migrate deploy`, sobe a nova versão e espera o healthcheck.
-4. **Rollback automático.** Se a nova versão não ficar saudável em 180 s, o script volta para a imagem anterior. Também existe o workflow manual `Rollback`.
-5. **Health check público.** Depois do deploy, o runner chama `APP_URL` + `/api/health` para confirmar que Traefik, DNS e TLS respondem.
+.env.production contém MYSQL_*, JWT_* e CORS_ORIGIN=https://atlastock.bevilabs.com.br.
+.env.migrate contém somente MYSQL_*, preferencialmente com usuário próprio para DDL.
+.env.backup contém DB_NAME, DB_USER e DB_PASSWORD do database realmente existente.
+A CA do mysql_shared fica em secrets/mysql-ca.pem, montada em API e migrator.
+O usuário de backup precisa das permissões de mysqldump para rotinas e triggers.
+O backup fica na própria VPS; mantenha cópia externa para recuperar perda do servidor.
 
-Um merge que muda só documentação (`*.md`, `docs/`) não publica nada.
+A chave CI não envia Compose, scripts ou ambientes. Alterações futuras nesses
+arquivos são sincronizadas manualmente antes do merge, com compatibilidade com
+a versão em execução. Este pipeline não modifica o toolbox.
 
-## Arquitetura em produção
+## Primeiro deploy e operação
 
-- O front chama a API por caminho **relativo** (`/api`). O Traefik roteia `Host(DOMAIN) && PathPrefix(/api)` para a API e o resto para o front, e mantém o subdomínio `api.DOMAIN` por compatibilidade. Por isso a imagem do front não carrega URL nenhuma.
-- O login demo (`VITE_DEMO_ADMIN_*`) é opcional e vem das variáveis de repositório de mesmo nome. Ele fica embutido no JS público, então use só uma conta sem privilégios. Sem as variáveis, o botão fica oculto.
-- MySQL compartilhado (`mysql_shared`) com TLS: a CA fica em `secrets/mysql-ca.pem` na pasta do projeto na VPS.
+1. Preparar VPS, environments, secrets, GHCR e DNS antes de mergear.
+2. Conferir CI e pr-title verdes no PR.
+3. Fazer squash merge manualmente.
+4. Aprovar o primeiro deploy em production-db. O migrator aplica apenas pendências.
+5. Conferir frontend e API; conferir .deploy-history e Deployments/task atlas-stock.
 
-### Na VPS (`/home/juliobevi/htdocs/bevilabs/bl_atlas_stock/`)
+O pipeline não executa seed ou populate automaticamente. Se ainda não existir
+administrador, configure SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD e
+SEED_FINANCEIRO_SENHA na VPS (senhas distintas com pelo menos 12 caracteres) e
+execute separadamente, usando a imagem runtime da versão publicada:
 
-| Arquivo | Conteúdo |
-|---|---|
-| `compose.yml` | Cópia de `deploy/compose.prod.yml` |
-| `.env` | `DOMAIN`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERT_RESOLVER`. A linha `IMAGE_TAG` é gerenciada pelo `deploy.sh` |
-| `.env.production` | Variáveis da aplicação (`MYSQL_*`, `JWT_*`, `CORS_ORIGIN`, `THROTTLE_*`), com `chmod 600` |
-| `.env.backup` | `DB_NAME`, `DB_USER`, `DB_PASSWORD` para o dump (`chmod 600`) |
-| `hooks/pre-migrate.sh` | Cópia de `deploy/hooks/pre-migrate.sh` |
-| `secrets/mysql-ca.pem` | CA do MySQL |
+```bash
+docker compose run --rm -T --no-deps api node dist/prisma/seed.js
+```
 
-### No GitHub
+Esse seed também atualiza a senha financeira; não execute em todo deploy.
 
-| Onde | Nome |
-|---|---|
-| Secrets dos environments `production` e `production-db` | `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS`, `VPS_HOST`, `VPS_USER`, `VPS_PORT` (se não for 22) |
-| (a chave em `VPS_SSH_KEY` é a mesma já autorizada no `authorized_keys` do `deploy`) | |
-| Variáveis do repositório | `APP_URL` (obrigatória), `HEALTH_PATH` (padrão `/api/health`), `VITE_DEMO_ADMIN_EMAIL` e `VITE_DEMO_ADMIN_PASSWORD` (opcionais) |
+Para consultar a versão pelo executor: deploy-atlas-stock.sh bl_atlas_stock status.
+Para rollback: Actions → Rollback, branch main, informe SHA de uma versão já
+publicada. Migrations posteriores exigem confirm_schema_compat. A imagem escolhida
+é registrada como base dos próximos deploys, não o commit que executou o workflow.
+Sem uma versão anterior publicada, não há rollback disponível.
 
-Os segredos da aplicação ficam só na VPS. O GitHub não conhece nenhum deles.
+Uma migration MySQL que falha pode deixar DDL parcial. Não tente reset em produção:
+inspecione o estado e recupere manualmente antes de liberar outro deploy.
+O up recria containers e pode gerar alguns segundos de indisponibilidade.
 
-## Migrations
-
-- Toda mudança no `schema.prisma` vem com a migration no mesmo PR (`npx prisma migrate dev --name <nome>`). A CI barra se faltar.
-- Uma migration já mergeada nunca é editada.
-- Migrations precisam ser **retrocompatíveis** (expand/contract): o rollback troca a imagem, mas não desfaz o schema.
-- O MySQL não tem DDL transacional, então uma migration que falha no meio deixa aplicado o que já rodou. Por isso as migrations são pequenas e há backup antes.
-
-## Segurança
-
-- Actions fixadas por SHA (o Dependabot atualiza), permissões mínimas por job e nenhum `pull_request_target`.
-- Os secrets de produção ficam em environments restritos à `main`, então um workflow alterado numa branch não consegue lê-los.
-- A chave SSH do CI é a do usuário `deploy`, compartilhada com outros projetos e **sem forced command**: quem tiver essa chave tem shell como `deploy` (grupo `docker`, equivalente a root). Endurecimento recomendado: uma chave por projeto com `command="/home/deploy/bin/deploy.sh bl_atlas_stock",restrict` no `authorized_keys` — o `deploy.sh` já aceita esse modo sem mudança. Mudanças em `deploy/` são aplicadas manualmente na VPS **antes** do merge.
-- Os logs do Actions são públicos: o `deploy.sh` nunca imprime variáveis de ambiente nem logs da aplicação.
-- As imagens rodam sem root (`USER node` e `nginx-unprivileged` na porta 8080).
-
-## Decisões e trade-offs
-
-| Decisão | Alternativa descartada | Motivo |
-|---|---|---|
-| GitHub Flow, só `main` fixa | GitFlow | Deploy contínuo com uma branch publicável é mais simples. |
-| Sem homologação | `staging` na mesma VPS | A VPS tem recursos limitados. A cobertura vem de CI com MySQL real, healthcheck, rollback e gate de migration. |
-| Build no runner + GHCR | `git pull && docker compose build` na VPS (modelo anterior) | Build reproduzível, rastreável pelo SHA e sem consumir CPU da produção. |
-| SSH como `deploy` (chave compartilhada) | Self-hosted runner | Um runner self-hosted em repo público executaria código de PRs de terceiros na VPS. |
-| API em `/api` relativo | URL absoluta `api.DOMAIN` no build | A mesma imagem serve qualquer domínio, sem CORS entre front e API. |
-| 0 aprovações obrigatórias no PR | 1 aprovação | Projeto solo: o autor não pode aprovar o próprio PR. |
-| Downtime de segundos no `up -d` | Blue/green | Aceitável para o porte do projeto. |
-
-## Limitações conhecidas
-
-- O `up -d` recria os containers, então há alguns segundos de 502 no Traefik.
-- O backup fica na mesma VPS: protege contra uma migration ruim, não contra perder a VPS.
-- `GET /api/health/ready` responde 200 mesmo com o banco fora (`database: "down"`). O pipeline usa `/api/health` (liveness).
-
-## Operação
-
-- Ver o que está no ar: aba **Deployments** do repositório, ou `.deploy-history` na pasta do projeto na VPS.
-- Voltar uma versão: Actions → **Rollback** → informe o SHA. Se houver migration criada depois desse SHA, o workflow lista quais são e só segue com `confirm_schema_compat` marcado.
-- Republicar a `main` (por exemplo, depois de sincronizar o compose): Actions → **CD** → *Run workflow*.
-- Build local/manual sem o pipeline: `docker-compose.yml` na raiz (`docker compose up -d --build`).
+Correções funcionais de estoque, financeiro e sessões permanecem para outros PRs.

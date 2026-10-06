@@ -97,12 +97,8 @@ npm run test:cov  # cobertura
   movimentações ajustam saldo e custo médio dentro de uma transação Prisma.
 - **RBAC em guard** (`@Roles`), nunca no controller.
 
-## GraphQL (somente leitura)
+## CI e deploy
 
-Endpoint: `POST /api/graphql` (mesma autenticação Bearer do REST). Escritas continuam apenas no REST.
-
-- Consultas: `me`, `categorias`, `produtos`, `produto(id)`, `compras`, `compra(id)`.
-- Sem regra própria: os resolvers delegam aos mesmos services do REST e validam argumentos com os mesmos schemas Zod (ex.: `limit <= 100`).
-- Campos aninhados usam DataLoader (1 consulta por tipo, sem N+1).
-- Limites: profundidade máxima 6; introspecção e landing page desativadas em `NODE_ENV=production`; erros internos mascarados.
-- Contrato: `src/graphql/schema.ts`. Em desenvolvimento, use introspecção para explorar.
+Use npm run lint:check, npm run typecheck, npm test e npm run build.
+O teste npm run test:e2e exige NODE_ENV=test, MYSQL_DATABASE=atlas_stock_ci e MYSQL_HOST=127.0.0.1, com migrations aplicadas.
+Produção e configuração do pipeline: [guia CI/CD](../docs/ci-cd.md).
