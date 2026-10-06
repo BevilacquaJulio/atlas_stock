@@ -1,0 +1,272 @@
+# pipeline: github-actions-vps
+#
+# CD — todo push na main (na prática, todo merge de PR) testa, builda e publica na VPS.
+#
+# Atlas Stock: backend/ (api + migrate) e frontend/ (web). Mantenha a linha "pipeline: github-actions-vps" acima.
+#
+# Fluxo: ci (reuso do ci.yml) + changes → build (imagens no GHCR, tag = SHA) → deploy (SSH com forced command).
+# Migration nova desde o último deploy bem-sucedido → environment "production-db" (aprovação manual + backup).
+# Sem migration nova → environment "production" (automático).
+# Se "production-db" não tiver revisor obrigatório (repo privado fora do Enterprise), o gate falha fechado:
+# deploy com migration só sai por Actions → CD → Run workflow com approve_migrations marcado.
+#
+# Pré-requisitos: environments, secrets e VPS configurados (references/vps-setup.md e references/repo-settings.md).
+# Variáveis de repositório: APP_URL (obrigatória), HEALTH_PATH (padrão /api/health),
+# VITE_DEMO_ADMIN_EMAIL / VITE_DEMO_ADMIN_PASSWORD (opcionais: login demo, embutido no JS público).
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      approve_migrations:
+        description: Aprovo aplicar migration nova (use só quando production-db não tem revisor obrigatório)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Sem concurrency no nível do workflow de propósito: a CI e o build de merges seguidos podem rodar em paralelo;
+# só o job "deploy" entra na fila "deploy-production" (sem cancelar o que está em andamento).
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MIGRATIONS_PATH: backend/prisma/migrations/
+
+jobs:
+  ci:
+    name: ci
+    # A sintaxe nova "$/.github/workflows/ci.yml" (jul/2026) ainda não é aceita pelo actionlint 1.7.12.
+    # Quando for, troque e remova o ignore.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # a CI só lê o código
+
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # git diff entre commits
+      deployments: read # achar o último deploy bem-sucedido
+    outputs:
+      deployable: ${{ steps.diff.outputs.deployable }}
+      migrations: ${{ steps.diff.outputs.migrations }}
+      infra: ${{ steps.diff.outputs.infra }}
+      base: ${{ steps.diff.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Comparar com o último deploy bem-sucedido
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          # Base = commit do último deploy que deu certo (production ou production-db).
+          # Comparar com ele, e não só com o push anterior, impede que um merge sem migration
+          # publique uma migration de outro merge que ainda está esperando aprovação.
+          base=""
+          while read -r id sha; do
+            [[ -n "${id:-}" ]] || continue
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""')"
+            if [[ "$state" == "success" ]]; then base="$sha"; break; fi
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/deployments?per_page=50" \
+                    --jq '.[] | select(.environment == "production" or .environment == "production-db") | "\(.id) \(.sha)"')
+
+          if [[ -z "$base" && -n "${BEFORE:-}" && ! "$BEFORE" =~ ^0+$ ]]; then base="$BEFORE"; fi
+
+          if [[ -n "$base" ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "Base da comparação: $base"
+            files="$(git diff --name-only "$base" "$GITHUB_SHA")"
+          else
+            echo "Sem deploy anterior confiável: tratando o repositório inteiro como alterado."
+            base=""
+            files="$(git ls-files)"
+          fi
+          printf 'Arquivos alterados:\n%s\n' "$files"
+
+          not_deployable='^(CHANGELOG\.md|version\.txt|\.release-please-manifest\.json|LICENSE|docs/.*|\.github/ISSUE_TEMPLATE/.*|\.github/dependabot\.yml|.*\.md)$'
+          deployable=false; migrations=false; infra=false
+          if [[ -n "$files" ]] && grep -qvE "$not_deployable" <<< "$files"; then deployable=true; fi
+          if grep -q "^${MIGRATIONS_PATH}" <<< "$files"; then migrations=true; fi
+          if grep -q '^deploy/' <<< "$files"; then infra=true; fi
+
+          {
+            echo "deployable=$deployable"
+            echo "migrations=$migrations"
+            echo "infra=$infra"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+          echo "deployable=$deployable migrations=$migrations infra=$infra"
+
+  build:
+    name: build (${{ matrix.image }})
+    needs: [ci, changes]
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # contexto do build
+      packages: write # push das imagens no GHCR
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: api
+            context: backend
+            target: runtime
+          - image: migrate
+            context: backend
+            target: migrate
+          - image: web
+            context: frontend
+            target: runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Nome da imagem (GHCR exige minúsculas)
+        id: img
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push (tag = SHA do commit)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.img.outputs.ref }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Só o Dockerfile do front declara estes ARGs; os demais ignoram. Vazio = botão de demo oculto.
+          build-args: |
+            VITE_DEMO_ADMIN_EMAIL=${{ vars.VITE_DEMO_ADMIN_EMAIL }}
+            VITE_DEMO_ADMIN_PASSWORD=${{ vars.VITE_DEMO_ADMIN_PASSWORD }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy:
+    name: deploy
+    needs: [changes, build]
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read # ler as regras de proteção do environment production-db (gate de migration)
+    environment:
+      name: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+      url: ${{ vars.APP_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      # Falha fechado: se production-db não exige revisor (plano/visibilidade sem esse recurso, ou revisor removido),
+      # o job chegou aqui sem aprovação. Nesse caso só segue com disparo manual explícito.
+      - name: Gate de migration
+        if: needs.changes.outputs.migrations == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          APPROVED: ${{ inputs.approve_migrations }}
+        run: |
+          reviewers="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-db" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' 2>/dev/null || echo 0)"
+          if [[ "$reviewers" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Migration nova aprovada no environment production-db ($reviewers revisor(es))."
+            exit 0
+          fi
+          if [[ "$EVENT" == "workflow_dispatch" && "$APPROVED" == "true" ]]; then
+            echo "::notice title=Migration aprovada manualmente::Disparo manual com approve_migrations. Backup antes da migration."
+            exit 0
+          fi
+          echo "::error title=Deploy com migration bloqueado::production-db não tem revisor obrigatório, então não houve aprovação. Revise as migrations e rode Actions → CD → Run workflow (main) marcando approve_migrations."
+          exit 1
+
+      - name: Aviso — arquivos de infraestrutura mudaram
+        if: needs.changes.outputs.infra == 'true'
+        run: echo "::warning title=deploy/ mudou::Arquivos em deploy/ mudaram. A chave do CI não altera infraestrutura — sincronize compose/scripts na VPS manualmente."
+
+      - name: Configurar SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy na VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          SHA: ${{ github.sha }}
+          MIGRATIONS: ${{ needs.changes.outputs.migrations }}
+        run: |
+          remote_cmd="deploy $SHA"
+          if [[ "$MIGRATIONS" == "true" ]]; then remote_cmd="$remote_cmd --backup"; fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "$remote_cmd"
+
+      - name: Health check público
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH || '/api/health' }}
+        run: |
+          if [[ -z "$APP_URL" ]]; then echo "::warning::APP_URL não definida; health check público pulado."; exit 0; fi
+          url="${APP_URL%/}${HEALTH_PATH}"
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 -o /dev/null "$url"; then echo "OK: $url (tentativa $attempt)"; exit 0; fi
+            sleep 6
+          done
+          echo "::error title=Health check público falhou::$url não respondeu 2xx. O container subiu saudável na VPS; investigue Traefik/DNS e, se preciso, rode o workflow Rollback."
+          exit 1
+
+      - name: Resumo
+        if: always()
+        env:
+          SHA: ${{ github.sha }}
+          ENV_NAME: ${{ needs.changes.outputs.migrations == 'true' && 'production-db' || 'production' }}
+          BASE: ${{ needs.changes.outputs.base }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy: ${JOB_STATUS}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Environment | ${ENV_NAME} |"
+            echo "| Comparado com | \`${BASE:-nenhum deploy anterior}\` |"
+            echo "| Imagens | \`ghcr.io/${GITHUB_REPOSITORY,,}/{api,migrate,web}:${SHA}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remover chave do runner
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

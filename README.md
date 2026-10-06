@@ -120,12 +120,9 @@ cd frontend
 npm install
 ```
 
-Copie `frontend/.env.example` para `frontend/.env`. Para o ambiente local, a
-configuração padrão é:
-
-```env
-VITE_API_URL=http://localhost:3000/api
-```
+Copie `frontend/.env.example` para `frontend/.env`. O front chama a API por
+caminho relativo (`/api`) e, no ambiente local, o Vite faz proxy de `/api` para
+`http://localhost:3000`; `VITE_API_URL` só é necessário para apontar outra API.
 
 Inicie o frontend:
 
@@ -274,27 +271,22 @@ docker compose logs --tail=100 api web
 Endpoints esperados:
 
 - Frontend: `https://g5.seudominio.com.br`
-- API: `https://api.g5.seudominio.com.br/api`
-- Health check: `https://api.g5.seudominio.com.br/api/health`
-- Banco de dados: `https://api.g5.seudominio.com.br/api/health/ready`
-- Swagger: `https://api.g5.seudominio.com.br/api/docs`
+- API: `https://g5.seudominio.com.br/api` (também em `https://api.g5.seudominio.com.br/api`)
+- Health check: `https://g5.seudominio.com.br/api/health`
+- Banco de dados: `https://g5.seudominio.com.br/api/health/ready`
+- Swagger: `https://g5.seudominio.com.br/api/docs`
 
 O endpoint `/api/health/ready` deve responder com `database: "up"`.
 
 ## Atualização em produção
 
-Fluxo recomendado:
+A produção é atualizada pelo pipeline do GitHub Actions: todo merge na `main`
+passa pela CI, publica imagens no GHCR (tag = SHA) e faz o deploy na VPS por
+SSH, com gate de aprovação e backup quando há migration nova. Detalhes,
+rollback e configuração da VPS em [docs/ci-cd.md](./docs/ci-cd.md).
 
-```bash
-git pull
-docker compose build
-docker compose run --rm migrate
-docker compose up -d
-docker compose ps
-```
-
-O valor de `VITE_API_URL` é incorporado durante o build do frontend. Alterações
-em `DOMAIN` exigem uma nova construção da imagem `web`.
+Os passos acima (`docker-compose.yml` na raiz, com build local) continuam
+válidos para uma instalação manual fora do pipeline.
 
 ## Variáveis de ambiente
 

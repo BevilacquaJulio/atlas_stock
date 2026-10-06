@@ -1,0 +1,37 @@
+name: Funcionalidade
+description: Proposta de funcionalidade ou melhoria
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema ou objetivo
+      description: O que precisa ser resolvido e para quem.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Como deve funcionar. Telas, regras, endpoints.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceite
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: migration
+    attributes:
+      label: Exige mudança no banco?
+      options:
+        - Não
+        - Sim, aditiva
+        - Sim, destrutiva ou rename (expand/contract)
+        - Não sei ainda

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_PIPE } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from 'nestjs-zod';
 
@@ -23,6 +23,8 @@ import { ProjetosModule } from './modules/projetos/projetos.module';
 import { FinanceiroModule } from './modules/financeiro/financeiro.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { FinanceiroUnlockGuard } from './common/guards/financeiro-unlock.guard';
+import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
+import { GraphqlApiModule } from './graphql/graphql-api.module';
 
 @Module({
   imports: [
@@ -58,11 +60,12 @@ import { FinanceiroUnlockGuard } from './common/guards/financeiro-unlock.guard';
     ProjetosModule,
     FinanceiroModule,
     DashboardModule,
+    GraphqlApiModule,
   ],
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: AppThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: FinanceiroUnlockGuard },

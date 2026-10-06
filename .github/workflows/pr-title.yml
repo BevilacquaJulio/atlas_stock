@@ -1,0 +1,36 @@
+# Valida o título do PR no padrão Conventional Commits.
+# Com squash merge, o título do PR vira a mensagem do commit na main — por isso ele é validado, não cada commit.
+# Check obrigatório no ruleset: "pr-title". Sem actions de terceiros e sem checkout.
+
+name: PR title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validar título (Conventional Commits)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        shell: bash
+        run: |
+          pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9][a-z0-9-]*\))?!?: [^ ].{1,98}$'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            printf 'OK: %s\n' "$TITLE"
+            exit 0
+          fi
+          printf 'Recebido: %s\n' "$TITLE"
+          echo "::error title=Título fora do padrão::Use '<tipo>(escopo): descrição' — ex.: 'feat(produtos): adiciona página de produto'. Tipos: feat, fix, perf, refactor, docs, test, build, ci, chore, style, revert. Use '!' antes de ':' para breaking change."
+          exit 1

@@ -1,0 +1,101 @@
+# Compose de PRODUÇÃO do Atlas Stock — usado pelo deploy.sh na VPS.
+# Versionado aqui e copiado MANUALMENTE para /home/deploy/apps/atlas_stock/compose.yml
+# (a chave SSH do CI só troca a tag da imagem; infraestrutura muda só à mão).
+#
+# Arquivos ao lado dele na VPS:
+#   .env                 interpolação: DOMAIN, TRAEFIK_ENTRYPOINT, TRAEFIK_CERT_RESOLVER
+#                        (a linha IMAGE_TAG é gerenciada pelo deploy.sh)
+#   .env.production      variáveis da aplicação (MYSQL_*, JWT_*, CORS_ORIGIN...), chmod 600
+#   secrets/mysql-ca.pem CA do MySQL compartilhado (TLS)
+#
+# Contrato do pipeline: image com ${IMAGE_TAG} (nunca build:), healthcheck em quem
+# recebe tráfego, migrate no profile "migrate", name: fixo.
+
+name: bl_atlas_stock
+
+services:
+  # ─────────────────────────── API (NestJS) ───────────────────────────
+  api:
+    image: ghcr.io/bevilacquajulio/atlas_stock/api:${IMAGE_TAG:?IMAGE_TAG não definida}
+    container_name: bl_atlas_stock-api
+    restart: unless-stopped
+    env_file: .env.production
+    volumes:
+      - ./secrets/mysql-ca.pem:/run/secrets/mysql-ca.pem:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - mysql_shared
+      - traefik
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      # Mesma origem do front (/api) + subdomínio api.* mantido por compatibilidade.
+      - "traefik.http.routers.atlas_stock_api.rule=(Host(`${DOMAIN:?DOMAIN não definida}`) && PathPrefix(`/api`)) || Host(`api.${DOMAIN}`)"
+      - traefik.http.routers.atlas_stock_api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.atlas_stock_api.tls=true
+      - traefik.http.routers.atlas_stock_api.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.atlas_stock_api.loadbalancer.server.port=3000
+    mem_limit: 512m
+    cpus: 0.75
+
+  # ─────────────────────── Frontend (React/Vite) ──────────────────────
+  web:
+    image: ghcr.io/bevilacquajulio/atlas_stock/web:${IMAGE_TAG:?IMAGE_TAG não definida}
+    container_name: bl_atlas_stock-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks:
+      - traefik
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - "traefik.http.routers.atlas_stock_web.rule=Host(`${DOMAIN:?DOMAIN não definida}`)"
+      - traefik.http.routers.atlas_stock_web.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.atlas_stock_web.tls=true
+      - traefik.http.routers.atlas_stock_web.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.atlas_stock_web.loadbalancer.server.port=8080
+    mem_limit: 128m
+    cpus: 0.25
+
+  # ─────────────── Migrator one-off (prisma migrate deploy) ─────────────
+  # Não sobe com "up": o deploy.sh roda "docker compose run --rm -T migrate".
+  migrate:
+    image: ghcr.io/bevilacquajulio/atlas_stock/migrate:${IMAGE_TAG:?IMAGE_TAG não definida}
+    profiles: ["migrate"]
+    restart: "no"
+    env_file: .env.production
+    volumes:
+      - ./secrets/mysql-ca.pem:/run/secrets/mysql-ca.pem:ro
+    networks:
+      - mysql_shared
+    mem_limit: 512m
+    cpus: 0.5
+
+networks:
+  mysql_shared:
+    external: true
+  traefik:
+    external: true

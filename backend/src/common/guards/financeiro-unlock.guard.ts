@@ -7,9 +7,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
-import type { Request } from 'express';
 import { FINANCEIRO_UNLOCK_KEY } from '../decorators/financeiro-unlock.decorator';
 import type { AuthenticatedUser } from '../types/authenticated-user';
+import { getRequest } from '../http/get-request';
 
 interface FinanceiroUnlockPayload {
   purpose: string;
@@ -31,7 +31,7 @@ export class FinanceiroUnlockGuard implements CanActivate {
     );
     if (!requiresUnlock) return true;
 
-    const request = context.switchToHttp().getRequest<Request>();
+    const request = getRequest(context);
     const user = request.user as AuthenticatedUser | undefined;
     if (user?.cargo === 'ADMINISTRADOR') return true;
 

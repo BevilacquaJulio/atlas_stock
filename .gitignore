@@ -54,7 +54,7 @@ coverage/
 # -----------------------------------------------------------------------------
 # Banco de dados — dumps e backups (nunca versionar dados reais)
 # -----------------------------------------------------------------------------
-sql/
+# Apenas dumps/backups: nao ignore `sql/` inteiro (pode conter DDL versionado).
 *.sql.gz
 *.dump
 sql/dumps/
@@ -112,8 +112,6 @@ $RECYCLE.BIN/
 .cursor/
 **/.claude
 **/.claude/**
-**/skills/
-**/SKILL.md
 
 # -----------------------------------------------------------------------------
 # Backups e arquivos temporários de editores
@@ -133,3 +131,8 @@ $RECYCLE.BIN/
 *.tar.gz
 *.rar
 *.7z
+
+# -----------------------------------------------------------------------------
+# Documentacao local de CI/CD (pode conter detalhes de infraestrutura)
+# -----------------------------------------------------------------------------
+/README-CI-CD.local.md

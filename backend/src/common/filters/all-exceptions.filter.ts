@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { GraphQLError } from 'graphql';
 import { ZodValidationException } from 'nestjs-zod';
 import type { Request, Response } from 'express';
 
@@ -26,12 +27,28 @@ interface ErrorEnvelope {
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost): void {
+  catch(exception: unknown, host: ArgumentsHost): GraphQLError | void {
+    const { status, body } = this.buildError(exception);
+
+    // Resolvers GraphQL: o valor retornado pelo filtro vira o erro da resposta.
+    if (host.getType<string>() === 'graphql') {
+      if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+        this.logger.error(
+          `graphql -> ${status}`,
+          exception instanceof Error ? exception.stack : String(exception),
+        );
+      }
+      return new GraphQLError(body.error.message, {
+        extensions: {
+          code: body.error.code,
+          ...(body.error.details ? { details: body.error.details } : {}),
+        },
+      });
+    }
+
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
-
-    const { status, body } = this.buildError(exception);
 
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
@@ -81,6 +98,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
     }
 
+    const prismaStatus = this.statusFromPrismaError(exception);
+    if (prismaStatus) {
+      return {
+        status: prismaStatus.status,
+        body: {
+          error: {
+            code: this.codeFromStatus(prismaStatus.status),
+            message: prismaStatus.message,
+          },
+        },
+      };
+    }
+
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       body: {
@@ -90,6 +120,37 @@ export class AllExceptionsFilter implements ExceptionFilter {
         },
       },
     };
+  }
+
+  /** Mensagens fixas: nunca repassa texto do driver, tabela ou coluna. */
+  private statusFromPrismaError(
+    exception: unknown,
+  ): { status: number; message: string } | undefined {
+    if (
+      !(exception instanceof Error) ||
+      exception.name !== 'PrismaClientKnownRequestError'
+    ) {
+      return undefined;
+    }
+    switch ((exception as Error & { code?: string }).code) {
+      case 'P2002':
+        return {
+          status: HttpStatus.CONFLICT,
+          message: 'Já existe um registro com estes dados.',
+        };
+      case 'P2003':
+        return {
+          status: HttpStatus.CONFLICT,
+          message: 'Registro vinculado a outros dados e não pode ser alterado.',
+        };
+      case 'P2025':
+        return {
+          status: HttpStatus.NOT_FOUND,
+          message: 'Registro não encontrado.',
+        };
+      default:
+        return undefined;
+    }
   }
 
   private codeFromStatus(status: number): string {

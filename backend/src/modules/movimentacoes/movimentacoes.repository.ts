@@ -67,6 +67,10 @@ export class MovimentacoesRepository {
       projetoId,
     } = params;
 
+    // Trava a linha do produto até o fim da transação: sem isso, duas saídas
+    // concorrentes leem o mesmo saldo e a última gravação apaga a primeira.
+    await tx.$queryRaw`SELECT id FROM produtos WHERE id = ${produtoId} FOR UPDATE`;
+
     const produto = await tx.produto.findUnique({ where: { id: produtoId } });
     if (!produto) {
       throw new Error('PRODUTO_NAO_ENCONTRADO');

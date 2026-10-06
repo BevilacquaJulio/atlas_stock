@@ -7,6 +7,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
   server: {
     port: 5173,
+    // Mesmo contrato da produção: o front chama /api na própria origem.
+    proxy: {
+      '/api': 'http://localhost:3000',
+    },
   },
   test: {
     globals: true,

@@ -57,10 +57,11 @@ export class ComprasRepository {
 
   cancelarCompra(id: number) {
     return this.prisma.$transaction(async (tx) => {
-      await tx.compra.update({
-        where: { id },
+      const { count } = await tx.compra.updateMany({
+        where: { id, status: { in: ['A_PAGAR', 'PAGO'] } },
         data: { status: 'CANCELADA' },
       });
+      if (count === 0) return null;
 
       await tx.despesa.updateMany({
         where: {

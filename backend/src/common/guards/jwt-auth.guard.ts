@@ -13,6 +13,7 @@ import type {
   AuthenticatedUser,
   JwtAccessPayload,
 } from '../types/authenticated-user';
+import { getRequest } from '../http/get-request';
 
 /**
  * Guard global de autenticação. Valida o Bearer access token e anexa o
@@ -33,17 +34,21 @@ export class JwtAuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest<Request>();
+    const request = getRequest(context);
     const token = this.extractToken(request);
     if (!token) {
       throw new UnauthorizedException('Token de acesso ausente.');
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync<JwtAccessPayload>(
-        token,
-        { secret: this.config.get<string>('JWT_ACCESS_SECRET') },
-      );
+      const payload = await this.jwtService.verifyAsync<
+        JwtAccessPayload & { purpose?: string }
+      >(token, { secret: this.config.get<string>('JWT_ACCESS_SECRET') });
+      // Tokens com `purpose` (ex.: desbloqueio do financeiro) compartilham o
+      // segredo, mas não são access tokens e não autenticam a API.
+      if (payload.purpose !== undefined) {
+        throw new UnauthorizedException('Token de acesso inválido.');
+      }
       const user: AuthenticatedUser = {
         id: payload.sub,
         nome: payload.nome,
@@ -52,7 +57,8 @@ export class JwtAuthGuard implements CanActivate {
       };
       request.user = user;
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw error;
       throw new UnauthorizedException('Token de acesso inválido ou expirado.');
     }
   }

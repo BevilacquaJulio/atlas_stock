@@ -96,3 +96,13 @@ npm run test:cov  # cobertura
 - **Estoque transacional** — criar produto com estoque inicial e registrar
   movimentações ajustam saldo e custo médio dentro de uma transação Prisma.
 - **RBAC em guard** (`@Roles`), nunca no controller.
+
+## GraphQL (somente leitura)
+
+Endpoint: `POST /api/graphql` (mesma autenticação Bearer do REST). Escritas continuam apenas no REST.
+
+- Consultas: `me`, `categorias`, `produtos`, `produto(id)`, `compras`, `compra(id)`.
+- Sem regra própria: os resolvers delegam aos mesmos services do REST e validam argumentos com os mesmos schemas Zod (ex.: `limit <= 100`).
+- Campos aninhados usam DataLoader (1 consulta por tipo, sem N+1).
+- Limites: profundidade máxima 6; introspecção e landing page desativadas em `NODE_ENV=production`; erros internos mascarados.
+- Contrato: `src/graphql/schema.ts`. Em desenvolvimento, use introspecção para explorar.

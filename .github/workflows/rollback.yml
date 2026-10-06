@@ -1,0 +1,123 @@
+# Rollback manual — republica as imagens de um commit anterior da main que já foi buildado.
+#
+# Uso: Actions → Rollback → Run workflow (a partir da main) → informe o SHA completo.
+#   ou: gh workflow run rollback.yml -f sha=<sha de 40 caracteres>
+# Use o SHA de um deploy anterior (aba Deployments do repo ou .deploy-history na VPS).
+# Rollback de imagem NÃO desfaz migration. Se houver migration criada depois do SHA escolhido, o código antigo vai
+# rodar contra o schema novo: o workflow lista essas migrations e só segue com confirm_schema_compat marcado.
+
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: SHA completo (40 caracteres) de um commit da main que já foi publicado
+        required: true
+        type: string
+      confirm_schema_compat:
+        description: Confirmo que o código desse SHA funciona com as migrations aplicadas depois dele (expand/contract)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Um rollback por vez. O job de rollback ainda entra na fila "deploy-production" junto com o CD.
+concurrency:
+  group: rollback
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Mesmo valor do cd.yml.
+  MIGRATIONS_PATH: backend/prisma/migrations/
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # conferir se o SHA está na main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validar o SHA informado
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Informe o SHA completo, em minúsculas, com 40 caracteres."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::Esse commit não faz parte do histórico da main."
+            exit 1
+          fi
+          echo "OK: $SHA está na main."
+
+      - name: Conferir migrations posteriores ao SHA
+        env:
+          SHA: ${{ inputs.sha }}
+          CONFIRMED: ${{ inputs.confirm_schema_compat }}
+        run: |
+          newer="$(git diff --name-only --diff-filter=A "$SHA" origin/main -- "$MIGRATIONS_PATH" | xargs -r -n1 dirname | sort -u)"
+          if [[ -z "$newer" ]]; then
+            echo "Nenhuma migration criada depois de $SHA: o schema é compatível."
+            exit 0
+          fi
+          {
+            echo "### Migrations criadas depois de \`$SHA\`"
+            echo ""
+            echo "O rollback troca a imagem, mas estas migrations continuam aplicadas:"
+            echo ""
+            while read -r dir; do echo "- \`$dir\`"; done <<< "$newer"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$CONFIRMED" != "true" ]]; then
+            echo "::error title=Rollback com schema mais novo::Há migrations posteriores a esse SHA (veja o resumo). Confirme que o código antigo funciona com elas e rode de novo marcando confirm_schema_compat — ou corrija com um PR novo."
+            exit 1
+          fi
+          echo "::warning title=Rollback com schema mais novo::Confirmado pelo usuário: o código de $SHA vai rodar com migrations posteriores."
+
+  rollback:
+    name: rollback
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Configurar SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Republicar a versão escolhida
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "deploy $SHA"
+
+      - name: Remover chave do runner
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
