@@ -21,7 +21,7 @@ Interface do ERP de blindagem de veículos. Migração do frontend PHP/vanilla p
    ```
 2. **Configurar** — copie `.env.example` para `.env`:
    ```bash
-   cp .env.example .env   # VITE_API_URL=http://localhost:3000/api
+   cp .env.example .env   # VITE_API_URL=/api
    ```
 3. **Subir** (com o backend já rodando):
    ```bash

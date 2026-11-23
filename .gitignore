@@ -133,3 +133,13 @@ $RECYCLE.BIN/
 *.tar.gz
 *.rar
 *.7z
+
+# Chaves e estado local do deploy não entram no repositório público.
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+backups/
+.deploy-history
+.deploy.lock
+/README-CI-CD.local.md
