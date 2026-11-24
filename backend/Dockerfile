@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -15,7 +15,7 @@ COPY src/config/database-url.ts ./src/config/database-url.ts
 USER node
 CMD ["./node_modules/.bin/prisma", "migrate", "deploy"]
 
-FROM node:24-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
