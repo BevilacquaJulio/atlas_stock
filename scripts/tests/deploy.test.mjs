@@ -23,7 +23,7 @@ function deploy({ previous = old, fail = '', backup = false, project = 'bl_atlas
 set -euo pipefail
 printf '%s tag=%s\\n' "$*" "\${IMAGE_TAG:-}" >> "$TRACE"
 case "$*" in
-  *'config --services') echo migrate ;;
+  *'config --services') echo api; echo migrate; sleep 0.3; echo web ;;
   *'config --images') printf 'ghcr.io/bevilacquajulio/atlas_stock/api:%s\\nghcr.io/other/toolbox/api:abc\\n' "$IMAGE_TAG" ;;
   *'pull --quiet') [[ "$FAIL" != pull ]] ;;
   *'run --rm -T migrate') [[ "$FAIL" != migrate ]] ;;
@@ -66,6 +66,14 @@ test('migration falha e mantém versão anterior', () => {
   assert.notEqual(result.status, 0);
   assert.ok(!result.calls.includes('up -d'));
   assert.ok(result.environment.includes(old));
+});
+
+test('deploy com backup acha migrate mesmo fora da última linha do compose', () => {
+  // Regressão: "compose config --services | grep -q" sob pipefail dava SIGPIPE (141).
+  const result = deploy({ backup: true });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(result.calls.includes('run --rm -T migrate'));
+  assert.ok(result.environment.includes(next));
 });
 
 test('versão sem saúde restaura imagem anterior', () => {

@@ -10,8 +10,10 @@ deployments="$(gh api --paginate "repos/$GITHUB_REPOSITORY/deployments?per_page=
 base=""
 while read -r id sha; do
   [[ -n "${id:-}" ]] || continue
-  state="$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')"
-  if [[ "$state" == "success" ]]; then base="$sha"; break; fi
+  # Qualquer status success conta: o GitHub marca o registro como "inactive" logo
+  # depois, quando o job com environment termina, e olhar só o último perdia a base.
+  ok="$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=100" --jq 'any(.[]; .state == "success")')"
+  if [[ "$ok" == "true" ]]; then base="$sha"; break; fi
 done <<< "$deployments"
 
 if [[ -n "$base" ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then

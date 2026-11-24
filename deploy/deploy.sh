@@ -106,7 +106,11 @@ cmd_deploy() {
     hooks/pre-migrate.sh "$project_dir" "$sha" || die "backup falhou — deploy abortado, versão anterior segue no ar"
   fi
 
-  if dc --profile migrate config --services | grep -qx migrate; then
+  local services
+  services="$(dc --profile migrate config --services)"     || die "docker compose config falhou — confira o compose e os env_file. Nada foi alterado."
+  # grep sobre a variável, não em pipe: com pipefail, "compose | grep -q" toma SIGPIPE
+  # (141) quando migrate não é a última linha, e o if concluía que o serviço não existe.
+  if grep -qx migrate <<< "$services"; then
     log "aplicando migrations (sem pendências = nada a fazer)"
     dc run --rm -T migrate || die "migration falhou — a versão anterior segue no ar. MySQL não desfaz DDL parcial: confira o estado com 'prisma migrate status' antes de tentar de novo"
   else

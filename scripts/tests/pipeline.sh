@@ -126,8 +126,9 @@ expect 'base=' "$GITHUB_OUTPUT"
 pass 'primeiro deploy exige gate para migration histórica mesmo quando BEFORE existe'
 
 printf '12 %s\n11 %s\n' "$latest" "$initial" > "$test_root/deployments"
-echo failure > "$test_root/status.12"
-echo success > "$test_root/status.11"
+# O mock ignora --jq: o arquivo traz o resultado de any(.state == "success").
+echo false > "$test_root/status.12"
+echo true > "$test_root/status.11"
 : > "$GITHUB_OUTPUT"
 bash "$root/scripts/deploy-changes.sh"
 expect 'migrations=false' "$GITHUB_OUTPUT"
