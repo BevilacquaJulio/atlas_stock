@@ -16,8 +16,8 @@ vi.mock('./useAuth', () => ({
 }));
 
 vi.mock('../../lib/demo-auth', () => ({
-  demoAdminEmail: 'admin@atlas.com',
-  demoAdminPassword: 'atlas_stock123',
+  demoEmail: 'demo@exemplo.test',
+  demoPassword: 'senha-demo-ficticia',
   isDemoLoginEnabled: true,
 }));
 
@@ -52,8 +52,8 @@ describe('LoginPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Preencher acesso demo' }));
 
-    expect(screen.getByLabelText('E-mail')).toHaveValue('admin@atlas.com');
-    expect(screen.getByLabelText('Senha')).toHaveValue('atlas_stock123');
+    expect(screen.getByLabelText('E-mail')).toHaveValue('demo@exemplo.test');
+    expect(screen.getByLabelText('Senha')).toHaveValue('senha-demo-ficticia');
   });
 
   it('chama login com credenciais válidas', async () => {

@@ -25,7 +25,7 @@ export interface ProdutoFormValues {
   unidadeMedida: string;
   valorUnitario: number;
   estoqueInicial: number;
-  ativo: boolean;
+  ativo?: boolean;
 }
 
 export interface ProdutoUpdateValues {
@@ -35,5 +35,5 @@ export interface ProdutoUpdateValues {
   categoriaId: number;
   unidadeMedida: string;
   valorUnitario: number;
-  ativo: boolean;
+  ativo?: boolean;
 }

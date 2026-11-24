@@ -19,6 +19,9 @@ import {
 } from './dto/categoria.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { assertPodeAlterarStatus } from '../../common/permissions/status-cadastro';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../common/types/authenticated-user';
 
 @ApiTags('categorias')
 @ApiBearerAuth()
@@ -45,7 +48,9 @@ export class CategoriasController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateCategoriaDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    assertPodeAlterarStatus(user, dto);
     return this.service.update(id, dto);
   }
 

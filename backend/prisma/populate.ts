@@ -5,21 +5,43 @@
  * Uso (após migrations + seed base):
  *   cd backend
  *   npm run db:seed      # admin + categorias mínimas
- *   npm run db:populate  # dados demo completos
+ *   npm run db:populate  # dados demo completos + conta demo
+ *
+ * Variáveis obrigatórias: DEMO_EMAIL e DEMO_PASSWORD (conta OPERADOR usada pelo
+ * botão "Preencher acesso demo" do login). Essa senha é pública por design:
+ * use só em ambiente de demonstração, nunca a de um usuário real.
  *
  * Idempotente: registros demo usam e-mails @atlas.com / códigos DEMO-*.
  * Para repopular do zero, defina POPULATE_RESET=1 (apaga apenas dados demo).
  */
+import 'dotenv/config';
+import { randomBytes } from 'node:crypto';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import * as bcrypt from 'bcryptjs';
 import {
   PrismaClient,
   type Prisma,
 } from '../generated/prisma/client';
-import { buildDatabaseUrl } from '../src/config/database-url';
+import { buildDatabaseConfig } from '../src/config/database-url';
 
+function requireEnv(name: string, minLength = 1): string {
+  const value = process.env[name]?.trim();
+  if (!value || value.length < minLength) {
+    throw new Error(
+      `A variável ${name} é obrigatória para o populate${
+        minLength > 1 ? ` e deve ter ao menos ${minLength} caracteres` : ''
+      }.`,
+    );
+  }
+  return value;
+}
+
+const demoEmail = requireEnv('DEMO_EMAIL').toLowerCase();
+const demoSenha = requireEnv('DEMO_PASSWORD', 8);
+
+// Mesmo builder do seed: aplica TLS de verdade quando MYSQL_SSL=true.
 const prisma = new PrismaClient({
-  adapter: new PrismaMariaDb(buildDatabaseUrl()),
+  adapter: new PrismaMariaDb(buildDatabaseConfig()),
 });
 
 const DEMO_CLIENTE_EMAILS = [
@@ -103,20 +125,32 @@ async function registrarMovimentacao(
   });
 }
 
-async function ensureAdmin() {
-  const email = process.env.SEED_ADMIN_EMAIL ?? 'admin@atlas.com';
-  const senha = process.env.SEED_ADMIN_PASSWORD ?? 'admin123';
-  const senhaHash = await bcrypt.hash(senha, 10);
+/** Sem credencial padrão: o administrador vem do seed, com senha própria. */
+async function findAdmin() {
+  const admin = await prisma.usuario.findFirst({
+    where: { cargo: 'ADMINISTRADOR', ativo: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!admin) {
+    throw new Error('Nenhum administrador ativo. Rode `npm run db:seed` antes.');
+  }
+  return admin;
+}
 
+/**
+ * Conta demo: sempre OPERADOR e ativa, com a senha atual de DEMO_PASSWORD.
+ * Roda a cada populate para corrigir cargo/senha alterados por visitantes.
+ */
+async function ensureDemoUser() {
+  const existente = await prisma.usuario.findUnique({ where: { email: demoEmail } });
+  if (existente?.cargo === 'ADMINISTRADOR') {
+    throw new Error('DEMO_EMAIL pertence a um administrador. Use outra conta.');
+  }
+  const senha = await bcrypt.hash(demoSenha, 10);
   return prisma.usuario.upsert({
-    where: { email },
-    update: {},
-    create: {
-      nome: 'Administrador',
-      email,
-      senha: senhaHash,
-      cargo: 'ADMINISTRADOR',
-    },
+    where: { email: demoEmail },
+    update: { senha, cargo: 'OPERADOR', ativo: true },
+    create: { nome: 'Visitante Demo', email: demoEmail, senha, cargo: 'OPERADOR' },
   });
 }
 
@@ -173,11 +207,6 @@ async function resetDemoData() {
     where: { codigo: { startsWith: 'DEMO-' } },
   });
 
-  await prisma.usuario.deleteMany({
-    where: {
-      email: { in: ['gerente@atlas.com', 'operador@atlas.com'] },
-    },
-  });
 }
 
 async function isAlreadyPopulated() {
@@ -188,6 +217,8 @@ async function isAlreadyPopulated() {
 }
 
 async function main() {
+  const operador = await ensureDemoUser();
+
   if (process.env.POPULATE_RESET === '1') {
     // eslint-disable-next-line no-console
     console.log('POPULATE_RESET=1 — removendo dados demo anteriores…');
@@ -200,28 +231,17 @@ async function main() {
     return;
   }
 
-  const admin = await ensureAdmin();
-  const senhaPadrao = await bcrypt.hash('demo123', 10);
+  const admin = await findAdmin();
 
+  // Só autora de registros demo: senha aleatória e descartada, ninguém entra com ela.
   const gerente = await prisma.usuario.upsert({
     where: { email: 'gerente@atlas.com' },
     update: {},
     create: {
       nome: 'Carla Gerente',
       email: 'gerente@atlas.com',
-      senha: senhaPadrao,
+      senha: await bcrypt.hash(randomBytes(32).toString('hex'), 10),
       cargo: 'GERENTE',
-    },
-  });
-
-  const operador = await prisma.usuario.upsert({
-    where: { email: 'operador@atlas.com' },
-    update: {},
-    create: {
-      nome: 'Pedro Operador',
-      email: 'operador@atlas.com',
-      senha: senhaPadrao,
-      cargo: 'OPERADOR',
     },
   });
 
@@ -885,15 +905,7 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log('\nPopulate concluído com sucesso.\n');
   // eslint-disable-next-line no-console
-  console.log('── Usuários ──');
-  // eslint-disable-next-line no-console
-  console.log(`  Admin:    ${process.env.SEED_ADMIN_EMAIL ?? 'admin@atlas.com'} / ${process.env.SEED_ADMIN_PASSWORD ?? 'admin123'}`);
-  // eslint-disable-next-line no-console
-  console.log('  Gerente:  gerente@atlas.com / demo123');
-  // eslint-disable-next-line no-console
-  console.log('  Operador: operador@atlas.com / demo123');
-  // eslint-disable-next-line no-console
-  console.log(`  Financeiro (desbloqueio): ${process.env.SEED_FINANCEIRO_SENHA ?? 'financeiro123'}`);
+  console.log(`  Conta demo (OPERADOR): ${demoEmail}`);
   // eslint-disable-next-line no-console
   console.log('\n── Resumo demo ──');
   // eslint-disable-next-line no-console

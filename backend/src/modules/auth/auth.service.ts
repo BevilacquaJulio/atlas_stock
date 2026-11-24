@@ -75,8 +75,11 @@ export class AuthService {
       throw new UnauthorizedException('Usuário indisponível.');
     }
 
-    // Rotação: revoga o token usado e emite um novo par.
-    await this.refreshTokens.revoke(stored.id);
+    // Rotação: consumo condicional, então só uma de duas renovações simultâneas
+    // recebe o novo par. Se a emissão falhar depois, o cliente refaz o login.
+    if (!(await this.refreshTokens.consume(stored.id))) {
+      throw new UnauthorizedException('Sessão expirada. Faça login novamente.');
+    }
     return this.issueTokens({
       id: usuario.id,
       nome: usuario.nome,

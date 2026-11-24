@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { getApiErrorMessage } from '../../lib/api';
 import { financeiroUnlockStore } from '../../lib/financeiro-unlock';
-import { formatBRL, formatDate } from '../../lib/format';
+import { formatBRL, formatDate, toApiDate } from '../../lib/format';
 import { PageHeader } from '../../components/PageHeader';
 import { ListToolbar, TableContainer } from '../../components/ListToolbar';
 import { Button } from '../../components/Button';
@@ -39,14 +39,14 @@ const unlockSchema = z.object({
 const despesaSchema = z.object({
   descricao: z.string().trim().min(1),
   valor: z.coerce.number().positive(),
-  dataVencimento: z.string().optional(),
+  dataVencimento: z.string().optional().transform(toApiDate),
   categoriaDespesaId: z.coerce.number().int().positive().optional(),
 });
 
 const receitaSchema = z.object({
   descricao: z.string().trim().min(1),
   valor: z.coerce.number().positive(),
-  dataVencimento: z.string().optional(),
+  dataVencimento: z.string().optional().transform(toApiDate),
 });
 
 export default function FinanceiroPage() {
@@ -55,7 +55,10 @@ export default function FinanceiroPage() {
   const desbloquearMut = useDesbloquearFinanceiro();
 
   const isAdmin = user?.cargo === 'ADMINISTRADOR';
-  const hasToken = !!financeiroUnlockStore.get();
+  const hasToken = !!useSyncExternalStore(
+    financeiroUnlockStore.subscribe,
+    financeiroUnlockStore.get,
+  );
   const unlocked =
     isAdmin || hasToken || statusQuery.data?.desbloqueado === true;
 
@@ -168,7 +171,7 @@ export default function FinanceiroPage() {
           </form>
           <p className="mt-4 text-xs text-[#0a0a0a]/45">
             Administradores acessam sem senha adicional. Demais usuários usam a
-            senha configurada no seed (padrão: financeiro123).
+            senha financeira definida pelo administrador.
           </p>
         </div>
       </>

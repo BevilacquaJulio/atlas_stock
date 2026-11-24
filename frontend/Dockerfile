@@ -4,6 +4,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+# Conta demo do portfólio: compilada no bundle público (nunca um administrador).
+ARG VITE_DEMO_EMAIL=
+ARG VITE_DEMO_PASSWORD=
+ENV VITE_DEMO_EMAIL=$VITE_DEMO_EMAIL VITE_DEMO_PASSWORD=$VITE_DEMO_PASSWORD
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:alpine AS runtime

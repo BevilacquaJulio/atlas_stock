@@ -11,8 +11,8 @@ import { Button } from '../../components/Button';
 import { Alert } from '../../components/feedback';
 import { BrandLogo } from '../../components/BrandLogo';
 import {
-  demoAdminEmail,
-  demoAdminPassword,
+  demoEmail,
+  demoPassword,
   isDemoLoginEnabled,
 } from '../../lib/demo-auth';
 
@@ -48,8 +48,8 @@ export default function LoginPage() {
   };
 
   const fillDemoCredentials = () => {
-    setValue('email', demoAdminEmail, { shouldValidate: true, shouldDirty: true });
-    setValue('senha', demoAdminPassword, { shouldValidate: true, shouldDirty: true });
+    setValue('email', demoEmail, { shouldValidate: true, shouldDirty: true });
+    setValue('senha', demoPassword, { shouldValidate: true, shouldDirty: true });
   };
 
   return (

@@ -5,6 +5,7 @@ import axios, {
 } from 'axios';
 import { tokenStore } from './token-store';
 import { financeiroUnlockStore } from './financeiro-unlock';
+import { queryClient } from '../app/queryClient';
 
 const baseURL = import.meta.env.VITE_API_URL ?? '/api';
 
@@ -55,6 +56,14 @@ api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const original = error.config as (RetriableConfig & InternalAxiosRequestConfig) | undefined;
+
+    if (error.response?.status === 403 && original?.headers?.['X-Financeiro-Token']) {
+      // Desbloqueio expirado ou recusado: descarta os dados e volta à tela de senha.
+      financeiroUnlockStore.clear();
+      queryClient.removeQueries({
+        predicate: (q) => q.queryKey[0] === 'financeiro' && q.queryKey[1] !== 'status',
+      });
+    }
 
     const isPublicAuthRoute =
       original?.url?.includes('/auth/login') ||

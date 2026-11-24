@@ -34,5 +34,5 @@ export interface ClienteFormValues {
   cidade?: string | null;
   estado?: string | null;
   observacoes?: string | null;
-  ativo: boolean;
+  ativo?: boolean;
 }

@@ -1,12 +1,12 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useQuery } from '@tanstack/react-query';
 import { TextField } from '../../components/form/TextField';
 import { SelectField } from '../../components/form/SelectField';
 import { Alert } from '../../components/feedback';
 import { listProdutos } from '../produtos/produtos.api';
 import type { MovimentacaoFormValues } from './movimentacoes.types';
+import { useOptionSearch } from '../../hooks/useOptionSearch';
 
 const schema = z.object({
   produtoId: z.coerce.number().int().positive('Selecione o produto.'),
@@ -24,9 +24,10 @@ export function MovimentacaoForm({
   onSubmit: (values: MovimentacaoFormValues) => void;
   error?: string | null;
 }) {
-  const produtosQuery = useQuery({
-    queryKey: ['produtos', 'options'],
-    queryFn: () => listProdutos({ limit: 100, ativo: true }),
+  const produtosSearch = useOptionSearch({
+    queryKey: ['produtos'],
+    fetch: (search) => listProdutos({ limit: 100, ativo: true, search }),
+    toOption: (p) => ({ value: p.id, label: `${p.codigo} — ${p.nome}` }),
   });
 
   const {
@@ -38,12 +39,6 @@ export function MovimentacaoForm({
     defaultValues: { tipo: 'ENTRADA', quantidade: 1 },
   });
 
-  const produtoOptions =
-    produtosQuery.data?.data.map((p) => ({
-      value: p.id,
-      label: `${p.codigo} — ${p.nome}`,
-    })) ?? [];
-
   return (
     <form
       id="movimentacao-form"
@@ -54,10 +49,11 @@ export function MovimentacaoForm({
       <SelectField
         label="Produto"
         placeholder={
-          produtosQuery.isLoading ? 'Carregando…' : 'Selecione o produto'
+          produtosSearch.isLoading ? 'Carregando…' : 'Selecione o produto'
         }
         error={errors.produtoId?.message}
-        options={produtoOptions}
+        options={produtosSearch.options}
+        onSearch={produtosSearch.onSearch}
         {...register('produtoId')}
       />
       <div className="grid gap-4 sm:grid-cols-2">

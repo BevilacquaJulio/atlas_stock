@@ -3,7 +3,6 @@ import { Link, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useQuery } from '@tanstack/react-query';
 import { getApiErrorMessage } from '../../lib/api';
 import { formatBRL, formatDate, formatQuantidade } from '../../lib/format';
 import { PageHeader } from '../../components/PageHeader';
@@ -29,6 +28,7 @@ import {
   type ConsumoFormValues,
   type ProjetoStatus,
 } from './projetos.types';
+import { useOptionSearch } from '../../hooks/useOptionSearch';
 
 function StatusBadge({ status }: { status: ProjetoStatus }) {
   const styles: Record<ProjetoStatus, string> = {
@@ -38,7 +38,9 @@ function StatusBadge({ status }: { status: ProjetoStatus }) {
     CANCELADO: 'badge--ghost',
   };
   return (
-    <span className={`badge ${styles[status]}`}>{PROJETO_STATUS_LABEL[status]}</span>
+    <span className={`badge ${styles[status]}`}>
+      {PROJETO_STATUS_LABEL[status]}
+    </span>
   );
 }
 
@@ -64,7 +66,10 @@ const consumoSchema = z
       d.tipo === 'SERVICO'
         ? !!d.descricao?.trim()
         : d.produtoId != null && d.produtoId > 0,
-    { message: 'Preencha produto ou descrição conforme o tipo.', path: ['produtoId'] },
+    {
+      message: 'Preencha produto ou descrição conforme o tipo.',
+      path: ['produtoId'],
+    },
   );
 
 export default function ProjetoDetalhesPage() {
@@ -83,9 +88,10 @@ export default function ProjetoDetalhesPage() {
   const deleteChecklistMut = useDeleteChecklistItem(projetoId);
   const consumoMut = useRegistrarConsumo(projetoId);
 
-  const produtosQuery = useQuery({
-    queryKey: ['produtos', 'options'],
-    queryFn: () => listProdutos({ limit: 100, ativo: true }),
+  const produtosSearch = useOptionSearch({
+    queryKey: ['produtos'],
+    fetch: (search) => listProdutos({ limit: 100, ativo: true, search }),
+    toOption: (p) => ({ value: p.id, label: `${p.codigo} — ${p.nome}` }),
   });
 
   const statusForm = useForm<z.infer<typeof statusSchema>>({
@@ -163,12 +169,6 @@ export default function ProjetoDetalhesPage() {
     return <Alert kind="error">{getApiErrorMessage(query.error)}</Alert>;
   if (!projeto) return <EmptyState title="Projeto não encontrado" />;
 
-  const produtoOptions =
-    produtosQuery.data?.data.map((p) => ({
-      value: p.id,
-      label: `${p.codigo} — ${p.nome}`,
-    })) ?? [];
-
   return (
     <>
       <div className="mb-4">
@@ -236,10 +236,7 @@ export default function ProjetoDetalhesPage() {
         ) : (
           <ul className="divide-y divide-[#e5e5e5] rounded-md border border-[#e5e5e5] bg-white">
             {projeto.checklist?.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-3 px-4 py-3"
-              >
+              <li key={item.id} className="flex items-center gap-3 px-4 py-3">
                 <input
                   type="checkbox"
                   checked={item.concluido}
@@ -273,7 +270,9 @@ export default function ProjetoDetalhesPage() {
       {/* Consumos */}
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Consumo de produtos e serviços</h2>
+          <h2 className="text-lg font-semibold">
+            Consumo de produtos e serviços
+          </h2>
           {projeto.status !== 'CANCELADO' && (
             <Button variant="secondary" onClick={() => setConsumoModal(true)}>
               Registrar consumo
@@ -303,7 +302,7 @@ export default function ProjetoDetalhesPage() {
                   <td className="px-4 py-3 text-sm">
                     {c.tipo === 'PRODUTO' && c.produto
                       ? `${c.produto.codigo} — ${c.produto.nome}`
-                      : c.descricao ?? '—'}
+                      : (c.descricao ?? '—')}
                   </td>
                   <td className="px-4 py-3 text-right text-sm text-[#0a0a0a]/70">
                     {formatQuantidade(c.quantidade)}
@@ -451,7 +450,8 @@ export default function ProjetoDetalhesPage() {
             <SelectField
               label="Produto"
               placeholder="Selecione o produto"
-              options={produtoOptions}
+              options={produtosSearch.options}
+              onSearch={produtosSearch.onSearch}
               error={consumoForm.formState.errors.produtoId?.message}
               {...consumoForm.register('produtoId')}
             />

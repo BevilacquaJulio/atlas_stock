@@ -4,10 +4,7 @@ import {
   buildPaginated,
   type PaginationParams,
 } from '../../common/dto/pagination.dto';
-import type {
-  CreateClienteInput,
-  UpdateClienteInput,
-} from './dto/cliente.dto';
+import type { CreateClienteInput, UpdateClienteInput } from './dto/cliente.dto';
 import type { Prisma } from '../../../generated/prisma/client';
 
 @Injectable()
@@ -56,13 +53,17 @@ export class ClientesService {
     return this.repo.update(id, { ativo: false });
   }
 
-  private normalize<T extends { email?: string | null; estado?: string | null }>(
-    input: T,
-  ): T {
+  private normalize<
+    T extends { email?: string | null; estado?: string | null },
+  >(input: T): T {
     return {
       ...input,
       email: input.email === '' ? null : input.email,
-      estado: input.estado === '' ? null : input.estado?.toUpperCase() ?? null,
+      // Ausente = preservar (PATCH parcial); '' ou null = limpar.
+      estado:
+        input.estado === undefined
+          ? undefined
+          : input.estado?.toUpperCase() || null,
     };
   }
 }

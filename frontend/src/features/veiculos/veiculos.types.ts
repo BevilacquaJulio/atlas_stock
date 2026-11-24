@@ -21,5 +21,5 @@ export interface VeiculoFormValues {
   ano?: string | null;
   cor?: string | null;
   observacoesTecnicas?: string | null;
-  ativo: boolean;
+  ativo?: boolean;
 }

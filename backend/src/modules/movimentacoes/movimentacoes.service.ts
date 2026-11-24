@@ -1,9 +1,6 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { MovimentacoesRepository } from './movimentacoes.repository';
+import { traduzirErroEstoque } from './estoque-errors';
 import { ProdutosRepository } from '../produtos/produtos.repository';
 import { buildPaginated } from '../../common/dto/pagination.dto';
 import type {
@@ -51,12 +48,7 @@ export class MovimentacoesService {
         usuarioId,
       });
     } catch (err) {
-      if (err instanceof Error && err.message === 'ESTOQUE_INSUFICIENTE') {
-        throw new BadRequestException(
-          'Estoque insuficiente para esta saída.',
-        );
-      }
-      throw err;
+      throw traduzirErroEstoque(err) ?? err;
     }
   }
 }

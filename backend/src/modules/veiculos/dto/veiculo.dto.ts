@@ -1,7 +1,8 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-export const createVeiculoSchema = z.object({
+// Base sem `.default()`: no Zod 4, `.partial()` aplicaria os defaults no PATCH.
+const veiculoBaseSchema = z.object({
   clienteId: z.coerce.number().int().positive(),
   placa: z
     .string()
@@ -14,11 +15,15 @@ export const createVeiculoSchema = z.object({
   ano: z.string().trim().max(10).optional().nullable(),
   cor: z.string().trim().max(40).optional().nullable(),
   observacoesTecnicas: z.string().trim().max(2000).optional().nullable(),
+  ativo: z.boolean(),
+});
+
+export const createVeiculoSchema = veiculoBaseSchema.extend({
   ativo: z.boolean().default(true),
 });
 export class CreateVeiculoDto extends createZodDto(createVeiculoSchema) {}
 
-export const updateVeiculoSchema = createVeiculoSchema.partial();
+export const updateVeiculoSchema = veiculoBaseSchema.partial();
 export class UpdateVeiculoDto extends createZodDto(updateVeiculoSchema) {}
 
 export type CreateVeiculoInput = z.infer<typeof createVeiculoSchema>;

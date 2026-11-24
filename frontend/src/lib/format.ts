@@ -22,3 +22,11 @@ export function formatDate(value: string): string {
         timeStyle: 'short',
       }).format(date);
 }
+
+/**
+ * Data de `<input type="date">` para a API: vazio vira ausente (a API rejeita '')
+ * e o dia vai ao meio-dia, para a meia-noite UTC não exibir o dia anterior no Brasil.
+ */
+export function toApiDate(value?: string): string | undefined {
+  return value ? `${value}T12:00:00` : undefined;
+}

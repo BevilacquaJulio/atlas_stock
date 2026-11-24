@@ -8,6 +8,8 @@ import {
 } from 'react';
 import { SESSION_EXPIRED_EVENT } from '../../lib/api';
 import { tokenStore } from '../../lib/token-store';
+import { financeiroUnlockStore } from '../../lib/financeiro-unlock';
+import { queryClient } from '../../app/queryClient';
 import { loginRequest, logoutRequest, restoreSession } from './auth.api';
 import type { AuthUser } from './auth.types';
 
@@ -18,6 +20,18 @@ export interface AuthContextValue {
   status: Status;
   login: (email: string, senha: string) => Promise<void>;
   logout: () => Promise<void>;
+}
+
+/**
+ * Descarta tudo o que pertence à identidade anterior (tokens, desbloqueio
+ * financeiro e cache). Cancela antes de limpar para respostas pendentes da
+ * sessão antiga não repovoarem a tela da próxima.
+ */
+function clearSessionData(): void {
+  void queryClient.cancelQueries();
+  queryClient.clear();
+  tokenStore.clear();
+  financeiroUnlockStore.clear();
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -41,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStatus('authenticated');
       } catch {
         if (!active) return;
-        tokenStore.clear();
+        clearSessionData();
         setStatus('unauthenticated');
       }
     }
@@ -53,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handler = () => {
+      clearSessionData();
       setUser(null);
       setStatus('unauthenticated');
     };
@@ -62,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, senha: string) => {
     const res = await loginRequest(email, senha);
+    clearSessionData();
     tokenStore.setAccess(res.accessToken);
     tokenStore.setRefresh(res.refreshToken);
     setUser(res.user);
@@ -69,8 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await logoutRequest();
-    tokenStore.clear();
+    try {
+      await logoutRequest();
+    } finally {
+      clearSessionData();
+    }
     setUser(null);
     setStatus('unauthenticated');
   }, []);
