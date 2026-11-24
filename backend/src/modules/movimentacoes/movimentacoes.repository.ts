@@ -11,6 +11,8 @@ type RegistrarParams = {
   usuarioId: number;
   compraId?: number;
   projetoId?: number;
+  /** SAIDA que desfaz uma ENTRADA (estorno de recebimento): reverte o custo médio. */
+  estornoEntrada?: boolean;
 };
 
 @Injectable()
@@ -67,6 +69,10 @@ export class MovimentacoesRepository {
       projetoId,
     } = params;
 
+    // Trava a linha do produto até o fim da transação: sem isso, duas saídas
+    // concorrentes leem o mesmo saldo e a última gravação apaga a primeira.
+    await tx.$queryRaw`SELECT id FROM produtos WHERE id = ${produtoId} FOR UPDATE`;
+
     const produto = await tx.produto.findUnique({ where: { id: produtoId } });
     if (!produto) {
       throw new Error('PRODUTO_NAO_ENCONTRADO');
@@ -91,6 +97,17 @@ export class MovimentacoesRepository {
         throw new Error('ESTOQUE_INSUFICIENTE');
       }
       novoEstoque = estoqueAtual - quantidade;
+      if (params.estornoEntrada) {
+        // Média ponderada reversa: retira do valor do estoque exatamente o que a
+        // entrada somou. Preserva o efeito de saídas/consumos intermediários.
+        const valorRestante =
+          estoqueAtual * custoMedioAtual - quantidade * custoUnitario;
+        // Sem saldo, ou valor negativo (saídas intermediárias valorizadas abaixo
+        // do custo da compra): mantém o custo corrente em vez de inventar um.
+        if (novoEstoque > 0 && valorRestante >= 0) {
+          novoCustoMedio = valorRestante / novoEstoque;
+        }
+      }
     }
 
     const movimentacao = await tx.movimentacao.create({

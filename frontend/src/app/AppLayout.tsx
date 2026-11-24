@@ -146,25 +146,25 @@ export function AppLayout() {
 
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={location.pathname}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            {/* Só animação de entrada. Com AnimatePresence mode="wait", o <Outlet/>
+                da página que sai já renderiza a rota nova (lazy); quando ela suspende
+                durante a saída, a troca trava e a página nova não aparece. */}
+            <motion.div
+              key={location.pathname}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <Suspense
+                fallback={
+                  <div className="flex min-h-[40vh] items-center justify-center">
+                    <Spinner />
+                  </div>
+                }
               >
-                <Suspense
-                  fallback={
-                    <div className="flex min-h-[40vh] items-center justify-center">
-                      <Spinner />
-                    </div>
-                  }
-                >
-                  <Outlet />
-                </Suspense>
-              </motion.div>
-            </AnimatePresence>
+                <Outlet />
+              </Suspense>
+            </motion.div>
           </div>
         </main>
       </div>

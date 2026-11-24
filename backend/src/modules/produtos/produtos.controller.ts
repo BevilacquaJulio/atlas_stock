@@ -17,6 +17,7 @@ import { CreateProdutoDto, UpdateProdutoDto } from './dto/produto.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { assertPodeAlterarStatus } from '../../common/permissions/status-cadastro';
 import type { AuthenticatedUser } from '../../common/types/authenticated-user';
 
 @ApiTags('produtos')
@@ -47,7 +48,9 @@ export class ProdutosController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateProdutoDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    assertPodeAlterarStatus(user, dto);
     return this.service.update(id, dto);
   }
 

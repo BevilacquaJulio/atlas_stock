@@ -11,6 +11,8 @@ import {
   isValidCpfCnpj,
 } from '../../lib/documents';
 import type { Fornecedor, FornecedorFormValues } from './fornecedores.types';
+import { useAuth } from '../auth/useAuth';
+import { podeAlterarStatus } from '../auth/permissions';
 
 const schema = z.object({
   nomeRazaoSocial: z.string().trim().min(2, 'Informe o nome / razão social.'),
@@ -38,6 +40,8 @@ export function FornecedorForm({
   onSubmit: (values: FornecedorFormValues) => void;
   error?: string | null;
 }) {
+  const { user } = useAuth();
+  const statusEditavel = podeAlterarStatus(user?.cargo);
   const {
     register,
     handleSubmit,
@@ -63,7 +67,10 @@ export function FornecedorForm({
   return (
     <form
       id="fornecedor-form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit((v) =>
+        // Sem permissão, `ativo` não vai no payload (a API responde 403).
+        onSubmit(statusEditavel ? v : { ...v, ativo: undefined }),
+      )}
       className="flex flex-col gap-4"
     >
       {error && <Alert kind="error">{error}</Alert>}
@@ -96,11 +103,13 @@ export function FornecedorForm({
         error={errors.email?.message}
         {...register('email')}
       />
-      <SwitchField
-        label="Ativo"
-        description="Fornecedores inativos não podem ser usados em novas compras."
-        {...register('ativo')}
-      />
+      {statusEditavel && (
+        <SwitchField
+          label="Ativo"
+          description="Fornecedores inativos não podem ser usados em novas compras."
+          {...register('ativo')}
+        />
+      )}
     </form>
   );
 }

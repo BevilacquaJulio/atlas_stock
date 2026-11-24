@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useQuery } from '@tanstack/react-query';
 import { TextField } from '../../components/form/TextField';
 import { SelectField } from '../../components/form/SelectField';
 import { TextareaField } from '../../components/form/TextareaField';
@@ -10,6 +9,7 @@ import { Alert } from '../../components/feedback';
 import { listClientes } from '../clientes/clientes.api';
 import { listVeiculos } from '../veiculos/veiculos.api';
 import type { ProjetoFormValues } from './projetos.types';
+import { useOptionSearch } from '../../hooks/useOptionSearch';
 
 const schema = z.object({
   clienteId: z.coerce.number().int().positive('Selecione o cliente.'),
@@ -27,9 +27,10 @@ export function ProjetoForm({
   onSubmit: (values: ProjetoFormValues) => void;
   error?: string | null;
 }) {
-  const clientesQuery = useQuery({
-    queryKey: ['clientes', 'options'],
-    queryFn: () => listClientes({ limit: 100, ativo: true }),
+  const clientesSearch = useOptionSearch({
+    queryKey: ['clientes'],
+    fetch: (search) => listClientes({ limit: 100, ativo: true, search }),
+    toOption: (c) => ({ value: c.id, label: c.nomeCompleto }),
   });
 
   const {
@@ -46,28 +47,20 @@ export function ProjetoForm({
   const clienteIdRaw = watch('clienteId');
   const clienteId = Number(clienteIdRaw) || 0;
 
-  const veiculosQuery = useQuery({
-    queryKey: ['veiculos', 'options', clienteId],
-    queryFn: () =>
-      listVeiculos({ limit: 100, ativo: true, clienteId }),
+  const veiculosSearch = useOptionSearch({
+    queryKey: ['veiculos', clienteId],
+    fetch: (search) =>
+      listVeiculos({ limit: 100, ativo: true, clienteId, search }),
+    toOption: (v) => ({
+      value: v.id,
+      label: `${v.placa} — ${v.marca} ${v.modelo}`,
+    }),
     enabled: clienteId > 0,
   });
 
   useEffect(() => {
     setValue('veiculoId', '' as unknown as number);
   }, [clienteId, setValue]);
-
-  const clienteOptions =
-    clientesQuery.data?.data.map((c) => ({
-      value: c.id,
-      label: c.nomeCompleto,
-    })) ?? [];
-
-  const veiculoOptions =
-    veiculosQuery.data?.data.map((v) => ({
-      value: v.id,
-      label: `${v.placa} — ${v.marca} ${v.modelo}`,
-    })) ?? [];
 
   return (
     <form
@@ -80,10 +73,11 @@ export function ProjetoForm({
       <SelectField
         label="Cliente"
         placeholder={
-          clientesQuery.isLoading ? 'Carregando…' : 'Selecione o cliente'
+          clientesSearch.isLoading ? 'Carregando…' : 'Selecione o cliente'
         }
         error={errors.clienteId?.message}
-        options={clienteOptions}
+        options={clientesSearch.options}
+        onSearch={clientesSearch.onSearch}
         {...register('clienteId')}
       />
 
@@ -93,14 +87,15 @@ export function ProjetoForm({
         placeholder={
           clienteId <= 0
             ? 'Selecione o cliente primeiro'
-            : veiculosQuery.isLoading
+            : veiculosSearch.isLoading
               ? 'Carregando…'
-              : veiculoOptions.length === 0
+              : veiculosSearch.options.length === 0
                 ? 'Nenhum veículo ativo'
                 : 'Selecione o veículo'
         }
         error={errors.veiculoId?.message}
-        options={veiculoOptions}
+        options={veiculosSearch.options}
+        onSearch={veiculosSearch.onSearch}
         disabled={clienteId <= 0}
         {...register('veiculoId')}
       />

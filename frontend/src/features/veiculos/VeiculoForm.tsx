@@ -1,7 +1,6 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useQuery } from '@tanstack/react-query';
 import { TextField } from '../../components/form/TextField';
 import { SelectField } from '../../components/form/SelectField';
 import { TextareaField } from '../../components/form/TextareaField';
@@ -9,6 +8,9 @@ import { SwitchField } from '../../components/form/SwitchField';
 import { Alert } from '../../components/feedback';
 import { listClientes } from '../clientes/clientes.api';
 import type { Veiculo, VeiculoFormValues } from './veiculos.types';
+import { useAuth } from '../auth/useAuth';
+import { podeAlterarStatus } from '../auth/permissions';
+import { useOptionSearch } from '../../hooks/useOptionSearch';
 
 const schema = z.object({
   clienteId: z.coerce.number().int().positive('Selecione o cliente.'),
@@ -31,9 +33,15 @@ export function VeiculoForm({
   onSubmit: (values: VeiculoFormValues) => void;
   error?: string | null;
 }) {
-  const clientesQuery = useQuery({
-    queryKey: ['clientes', 'options'],
-    queryFn: () => listClientes({ limit: 100, ativo: true }),
+  const { user } = useAuth();
+  const statusEditavel = podeAlterarStatus(user?.cargo);
+  const clientesSearch = useOptionSearch({
+    queryKey: ['clientes'],
+    fetch: (search) => listClientes({ limit: 100, ativo: true, search }),
+    toOption: (c) => ({ value: c.id, label: c.nomeCompleto }),
+    pinned: initial?.cliente
+      ? { value: initial.cliente.id, label: initial.cliente.nomeCompleto }
+      : null,
   });
 
   const {
@@ -54,26 +62,24 @@ export function VeiculoForm({
     },
   });
 
-  const clienteOptions =
-    clientesQuery.data?.data.map((c) => ({
-      value: c.id,
-      label: c.nomeCompleto,
-    })) ?? [];
-
   return (
     <form
       id="veiculo-form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit((v) =>
+        // Sem permissão, `ativo` não vai no payload (a API responde 403).
+        onSubmit(statusEditavel ? v : { ...v, ativo: undefined }),
+      )}
       className="flex flex-col gap-4"
     >
       {error && <Alert kind="error">{error}</Alert>}
       <SelectField
         label="Cliente"
         placeholder={
-          clientesQuery.isLoading ? 'Carregando…' : 'Selecione o cliente'
+          clientesSearch.isLoading ? 'Carregando…' : 'Selecione o cliente'
         }
         error={errors.clienteId?.message}
-        options={clienteOptions}
+        options={clientesSearch.options}
+        onSearch={clientesSearch.onSearch}
         {...register('clienteId')}
       />
       <div className="grid gap-4 sm:grid-cols-2">
@@ -99,11 +105,13 @@ export function VeiculoForm({
         label="Observações técnicas"
         {...register('observacoesTecnicas')}
       />
-      <SwitchField
-        label="Ativo"
-        description="Veículos inativos não podem ser usados em novos projetos."
-        {...register('ativo')}
-      />
+      {statusEditavel && (
+        <SwitchField
+          label="Ativo"
+          description="Veículos inativos não podem ser usados em novos projetos."
+          {...register('ativo')}
+        />
+      )}
     </form>
   );
 }

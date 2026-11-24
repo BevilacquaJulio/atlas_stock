@@ -21,6 +21,8 @@ interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
   error?: string;
   options: Option[];
   placeholder?: string;
+  /** Mostra um campo de busca na lista; o termo vai para quem carrega as opções. */
+  onSearch?: (term: string) => void;
 }
 
 /**
@@ -36,8 +38,9 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
     {
       label,
       error,
-      options,
+      options: optionsProp,
       placeholder,
+      onSearch,
       id,
       className = '',
       disabled,
@@ -53,10 +56,21 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
     const selectRef = useRef<HTMLSelectElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const listRef = useRef<HTMLUListElement | null>(null);
+    const searchRef = useRef<HTMLInputElement | null>(null);
+    // Última opção escolhida: continua na lista quando a busca troca os
+    // resultados, senão o <select> nativo perderia o valor.
+    const keptRef = useRef<Option | null>(null);
+    const [term, setTerm] = useState('');
 
     const [open, setOpen] = useState(false);
     const [value, setValue] = useState('');
     const [activeIndex, setActiveIndex] = useState(-1);
+
+    const kept = keptRef.current;
+    const options =
+      kept && !optionsProp.some((o) => String(o.value) === String(kept.value))
+        ? [kept, ...optionsProp]
+        : optionsProp;
 
     const setRefs = useCallback(
       (node: HTMLSelectElement | null) => {
@@ -75,19 +89,22 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
     });
 
     const selectedIndex = options.findIndex((o) => String(o.value) === value);
-    const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : '';
+    const selectedLabel =
+      selectedIndex >= 0 ? options[selectedIndex].label : '';
 
-    const commit = useCallback((next: string) => {
+    const commit = (next: string) => {
       const node = selectRef.current;
       if (!node) return;
       const setter = Object.getOwnPropertyDescriptor(
         window.HTMLSelectElement.prototype,
         'value',
       )?.set;
+      keptRef.current =
+        options.find((o) => String(o.value) === next) ?? keptRef.current;
       setter?.call(node, next);
       node.dispatchEvent(new Event('change', { bubbles: true }));
       setValue(next);
-    }, []);
+    };
 
     const openList = useCallback(() => {
       if (disabled) return;
@@ -95,24 +112,33 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
       setOpen(true);
     }, [disabled, selectedIndex]);
 
-    const closeList = useCallback(() => setOpen(false), []);
+    const closeList = useCallback(() => {
+      setOpen(false);
+      if (onSearch && term) {
+        setTerm('');
+        onSearch('');
+      }
+    }, [onSearch, term]);
+
+    useEffect(() => {
+      if (open && onSearch) searchRef.current?.focus();
+    }, [open, onSearch]);
 
     // Fecha ao clicar fora
     useEffect(() => {
       if (!open) return;
       const onPointer = (e: MouseEvent) => {
-        if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+        if (!rootRef.current?.contains(e.target as Node)) closeList();
       };
       window.addEventListener('mousedown', onPointer);
       return () => window.removeEventListener('mousedown', onPointer);
-    }, [open]);
+    }, [open, closeList]);
 
     // Mantém a opção ativa visível
     useEffect(() => {
       if (!open || activeIndex < 0) return;
       const el = listRef.current?.children[activeIndex] as
-        | HTMLElement
-        | undefined;
+        HTMLElement | undefined;
       el?.scrollIntoView({ block: 'nearest' });
     }, [open, activeIndex]);
 
@@ -127,6 +153,7 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
 
     const onTriggerKeyDown = (e: React.KeyboardEvent) => {
       if (disabled) return;
+      if (e.key === ' ' && e.target === searchRef.current) return;
       switch (e.key) {
         case 'ArrowDown':
         case 'ArrowUp':
@@ -220,7 +247,9 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
           >
             <span
               className={
-                selectedLabel ? 'truncate text-[#0a0a0a]' : 'truncate text-[#0a0a0a]/40'
+                selectedLabel
+                  ? 'truncate text-[#0a0a0a]'
+                  : 'truncate text-[#0a0a0a]/40'
               }
             >
               {selectedLabel || placeholder || 'Selecione'}
@@ -237,46 +266,72 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(
 
           <AnimatePresence>
             {open && (
-              <motion.ul
-                ref={listRef}
-                id={listboxId}
-                role="listbox"
-                aria-labelledby={labelId}
+              <motion.div
                 initial={{ opacity: 0, y: -6, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -6, scale: 0.98 }}
                 transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                className="absolute z-50 mt-1.5 max-h-64 w-full overflow-auto obsidian-scroll rounded-xl border border-[#e5e5e5] bg-white p-1 shadow-[var(--shadow-lift)] ring-1 ring-black/5"
+                className="absolute z-50 mt-1.5 w-full rounded-xl border border-[#e5e5e5] bg-white p-1 shadow-[var(--shadow-lift)] ring-1 ring-black/5"
               >
-                {placeholder && (
-                  <SelectOption
-                    active={activeIndex === -1}
-                    selected={value === ''}
-                    muted
-                    onSelect={() => {
-                      commit('');
-                      closeList();
+                {onSearch && (
+                  <input
+                    ref={searchRef}
+                    type="search"
+                    value={term}
+                    placeholder="Buscar…"
+                    aria-label={`Buscar ${label.toLowerCase()}`}
+                    aria-controls={listboxId}
+                    className="mb-1 w-full rounded-lg border border-[#e5e5e5] px-3 py-1.5 text-sm outline-none focus-visible:border-[#0a0a0a] focus-visible:ring-4 focus-visible:ring-[#0a0a0a]/10"
+                    onChange={(e) => {
+                      setTerm(e.target.value);
+                      setActiveIndex(0);
+                      onSearch(e.target.value);
                     }}
-                    onHover={() => setActiveIndex(-1)}
-                  >
-                    {placeholder}
-                  </SelectOption>
+                    onKeyDown={onTriggerKeyDown}
+                  />
                 )}
-                {options.map((opt, i) => (
-                  <SelectOption
-                    key={opt.value}
-                    active={i === activeIndex}
-                    selected={String(opt.value) === value}
-                    onSelect={() => {
-                      commit(String(opt.value));
-                      closeList();
-                    }}
-                    onHover={() => setActiveIndex(i)}
-                  >
-                    {opt.label}
-                  </SelectOption>
-                ))}
-              </motion.ul>
+                <ul
+                  ref={listRef}
+                  id={listboxId}
+                  role="listbox"
+                  aria-labelledby={labelId}
+                  className="max-h-64 overflow-auto obsidian-scroll"
+                >
+                  {placeholder && (
+                    <SelectOption
+                      active={activeIndex === -1}
+                      selected={value === ''}
+                      muted
+                      onSelect={() => {
+                        commit('');
+                        closeList();
+                      }}
+                      onHover={() => setActiveIndex(-1)}
+                    >
+                      {placeholder}
+                    </SelectOption>
+                  )}
+                  {options.map((opt, i) => (
+                    <SelectOption
+                      key={opt.value}
+                      active={i === activeIndex}
+                      selected={String(opt.value) === value}
+                      onSelect={() => {
+                        commit(String(opt.value));
+                        closeList();
+                      }}
+                      onHover={() => setActiveIndex(i)}
+                    >
+                      {opt.label}
+                    </SelectOption>
+                  ))}
+                  {onSearch && options.length === 0 && (
+                    <li className="px-3 py-2 text-sm text-[#0a0a0a]/45">
+                      Nenhum resultado
+                    </li>
+                  )}
+                </ul>
+              </motion.div>
             )}
           </AnimatePresence>
         </div>
@@ -326,7 +381,12 @@ function SelectOption({
     >
       <span className="truncate">{children}</span>
       {selected && (
-        <IconCheck width={15} height={15} aria-hidden="true" className="shrink-0" />
+        <IconCheck
+          width={15}
+          height={15}
+          aria-hidden="true"
+          className="shrink-0"
+        />
       )}
     </li>
   );

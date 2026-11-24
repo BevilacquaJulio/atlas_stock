@@ -15,6 +15,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { VeiculosService } from './veiculos.service';
 import { CreateVeiculoDto, UpdateVeiculoDto, VeiculoQueryDto } from './dto/veiculo.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { assertPodeAlterarStatus } from '../../common/permissions/status-cadastro';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../common/types/authenticated-user';
 
 @ApiTags('veiculos')
 @ApiBearerAuth()
@@ -41,7 +44,9 @@ export class VeiculosController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateVeiculoDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    assertPodeAlterarStatus(user, dto);
     return this.service.update(id, dto);
   }
 

@@ -10,5 +10,5 @@ export interface Categoria {
 export interface CategoriaFormValues {
   nome: string;
   descricao?: string | null;
-  ativo: boolean;
+  ativo?: boolean;
 }

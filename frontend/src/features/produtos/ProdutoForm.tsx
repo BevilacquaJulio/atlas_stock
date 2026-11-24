@@ -1,18 +1,18 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useQuery } from '@tanstack/react-query';
 import { TextField } from '../../components/form/TextField';
 import { SelectField } from '../../components/form/SelectField';
 import { TextareaField } from '../../components/form/TextareaField';
 import { SwitchField } from '../../components/form/SwitchField';
 import { UnidadeMedidaField } from '../../components/form/UnidadeMedidaField';
 import { Alert } from '../../components/feedback';
-import {
-  resolveUnidadeMedidaOptions,
-} from '../../lib/unidades-medida';
+import { resolveUnidadeMedidaOptions } from '../../lib/unidades-medida';
 import { listCategorias } from '../categorias/categorias.api';
 import type { Produto, ProdutoFormValues } from './produtos.types';
+import { useAuth } from '../auth/useAuth';
+import { podeAlterarStatus } from '../auth/permissions';
+import { useOptionSearch } from '../../hooks/useOptionSearch';
 
 const schema = z.object({
   codigo: z.string().trim().min(1, 'Informe o código.'),
@@ -35,10 +35,16 @@ export function ProdutoForm({
   onSubmit: (values: ProdutoFormValues) => void;
   error?: string | null;
 }) {
+  const { user } = useAuth();
+  const statusEditavel = podeAlterarStatus(user?.cargo);
   const isEdit = Boolean(initial);
-  const categoriasQuery = useQuery({
-    queryKey: ['categorias', 'options'],
-    queryFn: () => listCategorias({ limit: 100 }),
+  const categoriasSearch = useOptionSearch({
+    queryKey: ['categorias'],
+    fetch: (search) => listCategorias({ limit: 100, search }),
+    toOption: (c) => ({ value: c.id, label: c.nome }),
+    pinned: initial?.categoria
+      ? { value: initial.categoria.id, label: initial.categoria.nome }
+      : null,
   });
 
   const unidadeOptions = resolveUnidadeMedidaOptions(initial?.unidadeMedida);
@@ -61,14 +67,13 @@ export function ProdutoForm({
     },
   });
 
-  const categoriaOptions =
-    categoriasQuery.data?.data.map((c) => ({ value: c.id, label: c.nome })) ??
-    [];
-
   return (
     <form
       id="produto-form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit((v) =>
+        // Sem permissão, `ativo` não vai no payload (a API responde 403).
+        onSubmit(statusEditavel ? v : { ...v, ativo: undefined }),
+      )}
       className="flex flex-col gap-4"
     >
       {error && <Alert kind="error">{error}</Alert>}
@@ -94,10 +99,11 @@ export function ProdutoForm({
       <SelectField
         label="Categoria"
         placeholder={
-          categoriasQuery.isLoading ? 'Carregando…' : 'Selecione a categoria'
+          categoriasSearch.isLoading ? 'Carregando…' : 'Selecione a categoria'
         }
         error={errors.categoriaId?.message}
-        options={categoriaOptions}
+        options={categoriasSearch.options}
+        onSearch={categoriasSearch.onSearch}
         {...register('categoriaId')}
       />
       <div className="grid gap-4 sm:grid-cols-2">
@@ -125,11 +131,13 @@ export function ProdutoForm({
         </p>
       )}
       <TextareaField label="Descrição" {...register('descricao')} />
-      <SwitchField
-        label="Ativo"
-        description="Produtos inativos não entram em compras ou consumos."
-        {...register('ativo')}
-      />
+      {statusEditavel && (
+        <SwitchField
+          label="Ativo"
+          description="Produtos inativos não entram em compras ou consumos."
+          {...register('ativo')}
+        />
+      )}
     </form>
   );
 }

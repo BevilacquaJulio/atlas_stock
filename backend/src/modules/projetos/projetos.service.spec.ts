@@ -102,4 +102,30 @@ describe('ProjetosService', () => {
       service.alterarStatus(1, { status: 'EM_ANDAMENTO' }, 1),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('consumo sem estoque suficiente vira 400 (não 500)', async () => {
+    const movimentacoesRepo = makeMovimentacoesRepo();
+    movimentacoesRepo.registrar.mockRejectedValue(
+      new Error('ESTOQUE_INSUFICIENTE'),
+    );
+    const produtosRepo = makeProdutosRepo();
+    produtosRepo.findById.mockResolvedValue({
+      id: 3,
+      ativo: true,
+      custoMedio: 10,
+    });
+    projetosRepo.findById.mockResolvedValue({ id: 1, status: 'EM_ANDAMENTO' });
+    const svc = new ProjetosService(
+      projetosRepo as unknown as ProjetosRepository,
+      clientesRepo as unknown as ClientesRepository,
+      veiculosRepo as unknown as VeiculosRepository,
+      produtosRepo as unknown as ProdutosRepository,
+      movimentacoesRepo as unknown as MovimentacoesRepository,
+      makePrisma() as unknown as PrismaService,
+    );
+
+    await expect(
+      svc.registrarConsumo(1, { tipo: 'PRODUTO', produtoId: 3, quantidade: 99, valorUnitario: 10 }, 1),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 });

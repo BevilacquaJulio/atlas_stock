@@ -15,6 +15,8 @@ import {
 } from '../../lib/documents';
 import { CepLookupError, formatCep, lookupCep } from '../../lib/cep';
 import type { Cliente, ClienteFormValues } from './clientes.types';
+import { useAuth } from '../auth/useAuth';
+import { podeAlterarStatus } from '../auth/permissions';
 
 const schema = z.object({
   tipo: z.enum(['PF', 'PJ']),
@@ -51,6 +53,8 @@ export function ClienteForm({
   onSubmit: (values: ClienteFormValues) => void;
   error?: string | null;
 }) {
+  const { user } = useAuth();
+  const statusEditavel = podeAlterarStatus(user?.cargo);
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
   const lastLookedUpCep = useRef<string | null>(null);
@@ -138,7 +142,10 @@ export function ClienteForm({
   return (
     <form
       id="cliente-form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit((v) =>
+        // Sem permissão, `ativo` não vai no payload (a API responde 403).
+        onSubmit(statusEditavel ? v : { ...v, ativo: undefined }),
+      )}
       className="flex flex-col gap-3"
     >
       {error && <Alert kind="error">{error}</Alert>}
@@ -219,11 +226,13 @@ export function ClienteForm({
         className="min-h-14"
         {...register('observacoes')}
       />
-      <SwitchField
-        label="Ativo"
-        description="Clientes inativos não aparecem em novas operações."
-        {...register('ativo')}
-      />
+      {statusEditavel && (
+        <SwitchField
+          label="Ativo"
+          description="Clientes inativos não aparecem em novas operações."
+          {...register('ativo')}
+        />
+      )}
     </form>
   );
 }

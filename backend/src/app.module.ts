@@ -23,6 +23,7 @@ import { ProjetosModule } from './modules/projetos/projetos.module';
 import { FinanceiroModule } from './modules/financeiro/financeiro.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { FinanceiroUnlockGuard } from './common/guards/financeiro-unlock.guard';
+import { LOG_REDACT_PATHS } from './config/log-redact';
 
 @Module({
   imports: [
@@ -36,7 +37,7 @@ import { FinanceiroUnlockGuard } from './common/guards/financeiro-unlock.guard';
           process.env.NODE_ENV !== 'production'
             ? { target: 'pino-pretty', options: { singleLine: true } }
             : undefined,
-        redact: ['req.headers.authorization'],
+        redact: LOG_REDACT_PATHS,
       },
     }),
     ThrottlerModule.forRoot([

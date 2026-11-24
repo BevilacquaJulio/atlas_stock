@@ -1,7 +1,9 @@
-/** Credenciais demo para portfolio — só ativas quando ambas variáveis VITE_* existem. */
-export const demoAdminEmail = import.meta.env.VITE_DEMO_ADMIN_EMAIL?.trim() ?? '';
-export const demoAdminPassword =
-  import.meta.env.VITE_DEMO_ADMIN_PASSWORD?.trim() ?? '';
+/**
+ * Conta demo do portfólio (OPERADOR com dados fictícios). Vai no bundle público
+ * de propósito: nunca aponte para um administrador ou usuário real.
+ * O botão só aparece quando as duas variáveis existem no build.
+ */
+export const demoEmail = import.meta.env.VITE_DEMO_EMAIL?.trim() ?? '';
+export const demoPassword = import.meta.env.VITE_DEMO_PASSWORD?.trim() ?? '';
 
-export const isDemoLoginEnabled =
-  demoAdminEmail.length > 0 && demoAdminPassword.length > 0;
+export const isDemoLoginEnabled = demoEmail.length > 0 && demoPassword.length > 0;

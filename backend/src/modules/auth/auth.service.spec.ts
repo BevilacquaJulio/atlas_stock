@@ -75,3 +75,60 @@ describe('AuthService.login', () => {
     );
   });
 });
+
+describe('AuthService.refresh', () => {
+  const build = async (consumed: boolean) => {
+    const token = 'refresh.jwt.token';
+    const refreshTokens = {
+      findById: vi.fn().mockResolvedValue({
+        id: 5,
+        usuarioId: 1,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        tokenHash: await bcrypt.hash(token, 4),
+      }),
+      consume: vi.fn().mockResolvedValue(consumed),
+      revokeAllForUser: vi.fn(),
+      createEmpty: vi.fn().mockResolvedValue({ id: 6 }),
+      setHash: vi.fn(),
+    };
+    const usuarios = {
+      findById: vi
+        .fn()
+        .mockResolvedValue({
+          id: 1,
+          nome: 'A',
+          email: 'a@b.com',
+          cargo: 'OPERADOR',
+          ativo: true,
+        }),
+    };
+    const jwt = {
+      verifyAsync: vi.fn().mockResolvedValue({ sub: 1, tokenId: 5 }),
+      signAsync: vi.fn().mockResolvedValue('novo.jwt'),
+    };
+    const service = new AuthService(
+      usuarios as unknown as UsuariosRepository,
+      refreshTokens as unknown as RefreshTokenRepository,
+      jwt as never,
+      { get: vi.fn().mockReturnValue('7d') } as never,
+    );
+    return { service, refreshTokens, token };
+  };
+
+  it('quem consome o token recebe um novo par', async () => {
+    const { service, refreshTokens, token } = await build(true);
+    await expect(service.refresh(token)).resolves.toMatchObject({
+      accessToken: 'novo.jwt',
+    });
+    expect(refreshTokens.consume).toHaveBeenCalledWith(5);
+  });
+
+  it('renovação que perdeu a corrida do consumo recebe 401 e não emite sucessor', async () => {
+    const { service, refreshTokens, token } = await build(false);
+    await expect(service.refresh(token)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(refreshTokens.createEmpty).not.toHaveBeenCalled();
+  });
+});

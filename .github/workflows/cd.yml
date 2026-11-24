@@ -118,6 +118,10 @@ jobs:
           target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.img.outputs.ref }}:${{ github.sha }}
+          # Conta demo do portfólio (variáveis do repositório, públicas no bundle). Só o web usa.
+          build-args: |
+            VITE_DEMO_EMAIL=${{ vars.DEMO_EMAIL }}
+            VITE_DEMO_PASSWORD=${{ vars.DEMO_PASSWORD }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

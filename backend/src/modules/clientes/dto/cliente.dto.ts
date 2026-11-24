@@ -8,8 +8,10 @@ import {
 const optionalStr = (max: number) =>
   z.string().trim().max(max).optional().nullable();
 
-export const createClienteSchema = z.object({
-  tipo: z.enum(['PF', 'PJ']).default('PF'),
+// Base sem `.default()`: no Zod 4, `.partial()` aplica os defaults e um PATCH
+// parcial reativaria o cadastro ou trocaria PJ por PF.
+const clienteBaseSchema = z.object({
+  tipo: z.enum(['PF', 'PJ']),
   nomeCompleto: z.string().trim().min(2).max(200),
   cpfCnpj: z
     .string()
@@ -31,11 +33,16 @@ export const createClienteSchema = z.object({
   cidade: optionalStr(120),
   estado: z.string().trim().length(2).optional().or(z.literal('')).nullable(),
   observacoes: optionalStr(2000),
+  ativo: z.boolean(),
+});
+
+export const createClienteSchema = clienteBaseSchema.extend({
+  tipo: z.enum(['PF', 'PJ']).default('PF'),
   ativo: z.boolean().default(true),
 });
 export class CreateClienteDto extends createZodDto(createClienteSchema) {}
 
-export const updateClienteSchema = createClienteSchema.partial();
+export const updateClienteSchema = clienteBaseSchema.partial();
 export class UpdateClienteDto extends createZodDto(updateClienteSchema) {}
 
 export type CreateClienteInput = z.infer<typeof createClienteSchema>;
